@@ -1,0 +1,6 @@
+[    2.931442] tegra-camrtc-capture-vi tegra-capture-vi: subdev imx219 9-0010 bound
+[    3.102114] imx219 9-0010: supply vana not found, using dummy regulator
+[    3.102319] imx219 9-0010: supply vif not found, using dummy regulator
+[    3.105772] imx219 9-0010: imx219_power_on: failed to enable vana regulator
+[    3.106004] imx219 9-0010: probe failed
+[    3.106112] imx219 9-0010: camera probe failed with i2c -121

@@ -1,0 +1,56 @@
+patterns:
+  - name: camera_i2c_probe_failed
+    regex:
+      - "probe failed"
+      - "i2c.*-121"
+      - "imx.*probe"
+    bug_type: camera_probe_failure
+    suspected_areas:
+      - camera
+      - device_tree
+      - i2c
+      - regulator
+    skills:
+      - jetson-customize-camera
+      - jetson-customize-pinmux
+      - jetson-print-bsp-info
+
+  - name: gpio_request_failed
+    regex:
+      - "gpio.*failed"
+      - "can't request gpio"
+    bug_type: gpio_config_failure
+    suspected_areas:
+      - gpio
+      - device_tree
+      - pinmux
+    skills:
+      - jetson-customize-pinmux
+      - jetson-print-bsp-info
+
+  - name: kernel_config_missing
+    regex:
+      - "Unknown symbol"
+      - "module verification failed"
+      - "CONFIG_"
+    bug_type: kernel_config_failure
+    suspected_areas:
+      - kernel_config
+      - driver
+    skills:
+      - jetson-build-source
+      - jetson-print-bsp-info
+
+  - name: bootloader_flash_failure
+    regex:
+      - "tegraflash.py"
+      - "MB1"
+      - "BCT"
+      - "flash failed"
+    bug_type: flash_or_bootloader_failure
+    suspected_areas:
+      - bootloader
+      - flash
+    skills:
+      - jetson-build-source
+      - jetson-validate-image

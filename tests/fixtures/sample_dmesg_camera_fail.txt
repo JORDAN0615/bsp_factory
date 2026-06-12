@@ -1,0 +1,3 @@
+[    3.421000] imx219 9-0010: probe failed
+[    3.421100] imx219 9-0010: i2c transfer failed -121
+

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jetson-bsp-agent"
+version = "0.1.0"
+description = "Controlled Jetson BSP repair and validation workflow agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "gitpython>=3.1.0",
+  "langgraph>=1.0.0",
+  "langgraph-checkpoint-sqlite>=3.0.0",
+  "pydantic>=2.0.0",
+  "pydantic-settings>=2.0.0",
+  "python-dotenv>=1.0.0",
+  "pyyaml>=6.0.0",
+  "rich>=13.0.0",
+  "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+]
+
+[project.scripts]
+bsp-agent = "agent.main:app"
+
+[tool.setuptools.packages.find]
+include = ["agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
