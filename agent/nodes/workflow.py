@@ -52,16 +52,20 @@ def create_run(repo: Path, issue: str, logs: list[Path], settings: Settings) -> 
     state.new_attempt()
     state.save()
     _run_repair_pipeline(state, settings)
+    state = BSPAgentState.load(run_dir)
+    if state.stage == "report":
+        generate_report(run_dir)
+        return BSPAgentState.load(run_dir)
     return state
 
 
 def approve_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
     state = BSPAgentState.load(run_dir)
     attempt = state.current_attempt
-    if attempt.patch_status not in {"applied", "no_patch"}:
-        raise RuntimeError(f"Attempt is not ready for review: {attempt.patch_status}")
-    if attempt.patch_status == "no_patch":
-        raise RuntimeError("Cannot approve a NO_PATCH attempt.")
+    if attempt.patch_status != "generated":
+        raise RuntimeError(
+            f"Attempt is not ready for approval (patch status: {attempt.patch_status})."
+        )
     from agent.graph import resume_review_graph
 
     return resume_review_graph(state, settings, {"action": "approve"})
@@ -80,7 +84,15 @@ def reject_run(run_dir: str | Path, feedback: str, settings: Settings) -> BSPAge
 
 def continue_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
     state = BSPAgentState.load(run_dir)
-    if state.stage in {"classify_error", "select_skills", "load_skill", "inspect_repo", "propose_patch"}:
+    if state.stage in {
+        "classify_error",
+        "select_skills",
+        "load_skill",
+        "inspect_repo",
+        "propose_patch",
+        "validate_patch",
+        "code_review",
+    }:
         _run_repair_pipeline(state, settings)
         return state
     if state.stage == "report":
@@ -189,6 +201,9 @@ def show_diff(run_dir: str | Path) -> None:
             console.print(Syntax(diff_text, "diff", line_numbers=False))
         except PatchError:
             console.print(Markdown(patch.read_text(encoding="utf-8")))
+        code_review = _attempt_dir(state) / "code_review.md"
+        if code_review.exists():
+            console.print(Markdown(code_review.read_text(encoding="utf-8")))
     else:
         no_patch = _attempt_dir(state) / "no_patch.md"
         if no_patch.exists():
@@ -217,7 +232,7 @@ def generate_report(run_dir: str | Path) -> Path:
             final_status = "PASS"
         elif len(state.attempts) >= state.max_loops and attempt.validation_runs:
             final_status = "FAIL_AFTER_MAX_RETRIES"
-        elif attempt.patch_status == "no_patch":
+        elif attempt.patch_status in {"no_patch", "failed"}:
             final_status = "PATCH_GENERATION_FAILED"
     lines.extend(["", "## 3. Final Status", "", final_status, ""])
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -414,6 +429,34 @@ def _patch_markdown(attempt: RepairAttempt, diff_text: str) -> str:
     )
 
 
+def _publish_commit_message(state: BSPAgentState, attempt: RepairAttempt) -> str:
+    issue = " ".join(state.issue.split())
+    if len(issue) > 200:
+        issue = f"{issue[:197]}..."
+    files = attempt.changed_files or ["(none)"]
+    changed_files = "\n".join(f"- {file_name}" for file_name in files)
+    return (
+        f"BSP agent patch (run {state.run_id}, attempt {attempt.attempt_no:03d})\n\n"
+        f"Issue: {issue}\n"
+        "Changed files:\n"
+        f"{changed_files}\n"
+    )
+
+
+def _write_publish_artifact(state: BSPAgentState, attempt: RepairAttempt, remote: str) -> None:
+    write_json(
+        _attempt_dir(state) / "publish.json",
+        {
+            "branch": attempt.published_branch,
+            "commit": attempt.published_commit,
+            "remote": remote,
+            "status": attempt.publish_status,
+            "error": attempt.publish_error,
+            "changed_files": attempt.changed_files,
+        },
+    )
+
+
 def _parse_ssh_target(ssh_target: str) -> tuple[str | None, str]:
     if "@" in ssh_target:
         user, host = ssh_target.split("@", 1)
@@ -451,6 +494,11 @@ def _attempt_report(state: BSPAgentState, attempt: RepairAttempt) -> list[str]:
         f"- Bug type: `{attempt.bug_type}`",
         f"- Selected skills: `{', '.join(attempt.selected_skills) or 'none'}`",
     ]
+    if attempt.code_review_decision:
+        lines.append(
+            f"- Code review: `{attempt.code_review_decision}` "
+            f"(confidence `{attempt.code_review_confidence}`)"
+        )
     if attempt.target:
         lines.append(f"- Target: `{attempt.target.ssh_target}`")
         lines.append(f"- Git ref evidence: `{attempt.target.git_ref}`")
@@ -459,7 +507,7 @@ def _attempt_report(state: BSPAgentState, attempt: RepairAttempt) -> list[str]:
             f"- Validation `{validation.validation_id}`: `{validation.status}` "
             f"exit `{validation.returncode}` script `{validation.script}`"
         )
-    for name in ["patch.md", "no_patch.md", "analyze_result.md"]:
+    for name in ["patch.md", "code_review.md", "no_patch.md", "analyze_result.md"]:
         path = attempt_path / name
         if path.exists():
             lines.append(f"- Artifact: `{path}`")

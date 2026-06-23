@@ -17,6 +17,7 @@ from agent.nodes.workflow import (
     run_validation,
     show_diff,
 )
+from agent.state import BSPAgentState
 from agent.tools.git_tools import GitError
 from agent.tools.patch_tools import PatchError
 from agent.tools.path_tools import SafetyError
@@ -57,6 +58,8 @@ def init_run(
             _review_prompt(Path(state.run_dir))
         else:
             _print_review_commands(state.run_dir)
+    elif state.stage == "report":
+        console.print("[yellow]No reviewable patch after retries; see report.md.[/yellow]")
 
 
 @app.command("show-diff")
@@ -83,7 +86,7 @@ def approve(run: Path = typer.Option(..., exists=True, file_okay=False)) -> None
     except (RuntimeError, ValueError) as exc:
         fail(str(exc))
     console.print(f"[green]Approved attempt {state.current_attempt.attempt_no:03d}.[/green]")
-    console.print("Human should commit, push, build, and flash outside the agent.")
+    _print_publish_handoff(state)
 
 
 @app.command("review")
@@ -152,7 +155,7 @@ def _review_prompt(run: Path) -> None:
         if choice in {"a", "approve"}:
             state = approve_run(run, get_settings())
             console.print(f"[green]Approved attempt {state.current_attempt.attempt_no:03d}.[/green]")
-            console.print("Human should commit, push, build, and flash outside the agent.")
+            _print_publish_handoff(state)
             return
         if choice in {"r", "reject"}:
             feedback = typer.prompt("Reject feedback")
@@ -182,6 +185,45 @@ def _print_review_commands(run_dir: str) -> None:
     console.print(
         f'  .venv/bin/bsp-agent reject --run {run_dir} --feedback "explain what to change"',
         soft_wrap=True,
+    )
+
+
+def _print_publish_handoff(state: BSPAgentState) -> None:
+    # Auto-push disabled (or no publish ran): keep the human-owned handoff.
+    if state.stage not in {"published", "publish_failed"}:
+        console.print("Human should commit, push, build, and flash outside the agent.")
+        return
+
+    from agent.nodes.workflow import _publish_commit_message
+
+    attempt = state.current_attempt
+    branch = attempt.published_branch or f"bsp-agent/{state.run_id}"
+    subject = _publish_commit_message(state, attempt).splitlines()[0]
+    error = attempt.publish_error or "unknown error"
+
+    # git commit stage
+    console.print("[bold]git commit[/bold]")
+    console.print(f'  message: "{subject}"')
+    if attempt.published_commit:
+        console.print(f"  [green]success[/green] {attempt.published_commit[:10]} on {branch}")
+    else:
+        console.print(f"  [red]failed[/red]: {error}")
+        console.print(
+            "[yellow]Patch is applied locally but not committed. "
+            "Human must commit + push manually, then build and flash.[/yellow]"
+        )
+        return
+
+    # git push stage
+    console.print(f"[bold]git push[/bold] -> {branch}")
+    if state.stage == "published":
+        console.print("  [green]success[/green]")
+        console.print("Human should build and flash.")
+        return
+    console.print(f"  [red]failed[/red]: {error}")
+    console.print(
+        "[yellow]Committed locally on the branch, but push failed. "
+        "Human must push manually, then build and flash.[/yellow]"
     )
 
 

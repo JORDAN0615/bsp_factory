@@ -14,7 +14,12 @@ Stage = Literal[
     "load_skill",
     "inspect_repo",
     "propose_patch",
+    "validate_patch",
+    "code_review",
     "apply_patch",
+    "publish",
+    "published",
+    "publish_failed",
     "human_review",
     "target_ready",
     "run_tests",
@@ -27,7 +32,9 @@ Stage = Literal[
 
 PatchStatus = Literal["not_generated", "generated", "applied", "no_patch", "failed"]
 ReviewStatus = Literal["pending", "approved", "rejected"]
+CodeReviewDecision = Literal["pass", "reject", "needs_human"]
 ValidationStatus = Literal["pending", "running", "success", "failed"]
+PublishStatus = Literal["pending", "pushed", "failed"]
 
 
 def now_iso() -> str:
@@ -62,6 +69,14 @@ class RepairAttempt(BaseModel):
     patch_status: PatchStatus = "not_generated"
     human_review_status: ReviewStatus = "pending"
     human_feedback: str | None = None
+    code_review_decision: CodeReviewDecision | None = None
+    code_review_confidence: float | None = None
+    code_review_findings: list[str] = Field(default_factory=list)
+    code_review_required_changes: list[str] = Field(default_factory=list)
+    publish_status: PublishStatus | None = None
+    published_branch: str | None = None
+    published_commit: str | None = None
+    publish_error: str | None = None
     selected_skills: list[str] = Field(default_factory=list)
     bug_type: str | None = None
     suspected_areas: list[str] = Field(default_factory=list)
@@ -117,4 +132,3 @@ class BSPAgentState(BaseModel):
 
     def to_report_context(self) -> dict[str, Any]:
         return self.model_dump()
-

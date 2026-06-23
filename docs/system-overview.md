@@ -23,8 +23,9 @@ BSP issue / log
   -> load only selected full skills
   -> inspect the specified BSP source repo
   -> propose a conservative patch
-  -> apply patch to the working tree
   -> pause for human review
+  -> apply approved patch to the working tree
+  -> optionally commit/push to bsp-agent/<run_id>
   -> after human build/flash, validate a target device over SSH
   -> produce a report
 ```
@@ -35,7 +36,25 @@ The core safety principle is:
 LLM may propose source changes, but dangerous workflow boundaries stay explicit.
 ```
 
-The agent does not commit, push, build, flash, or store SSH/sudo passwords.
+Commit and push are opt-in (`AUTO_PUSH_ENABLED`, default off) and use a
+dedicated per-run branch `bsp-agent/<run_id>`. Build, flash, and SSH/sudo
+password handling remain outside the agent.
+
+### Trigger Sources
+
+A repair run always starts from a BSP issue and its logs. The architecture
+diagram (`docs/system architecture.png`) shows two ingestion paths feeding the
+same run entry point:
+
+```text
+Actor (manual)         -> bsp-agent init-run --repo --issue --log   (implemented)
+cronjob -> git issue   -> issue / log -> run entry point            (planned)
+```
+
+The manual `Actor` path is implemented today. The automated path in the
+diagram — a cronjob that polls a git issue tracker on an interval (drawn as
+30 minutes) and opens one run per new BSP issue — is a designed ingestion
+path and is not yet implemented in the CLI.
 
 ## 2. Current Architecture
 
@@ -63,19 +82,28 @@ flowchart TB
     select[select_skills<br/>LLM selects skill metadata]
     load[load_skill<br/>load selected full SKILL.md only]
     inspect[inspect_repo<br/>search/read BSP source]
-    propose[propose_patch<br/>LLM outputs unified diff or NO_PATCH]
+    patchagent[patch_agent<br/>LLM outputs unified diff or NO_PATCH]
     route{patch available?}
-    apply[apply_patch<br/>validate + git apply]
-    nopatch[write_no_patch]
+    validate[validate_patch<br/>normalize + git apply --check only]
+    reviewagent[code_review_agent<br/>independent LLM review, strict JSON]
+    nopatch[write_no_patch<br/>auto-retry until budget exhausted]
     review[human_review<br/>LangGraph interrupt]
     decision{resume command}
+    apply[apply_patch<br/>apply accepted patch.md]
+    publish[publish<br/>optional commit + push]
     end((END))
 
-    start --> classify --> select --> load --> inspect --> propose --> route
-    route -->|yes| apply --> review
-    route -->|no| nopatch --> review
+    start --> classify --> select --> load --> inspect --> patchagent --> route
+    route -->|diff| validate
+    route -->|NO_PATCH| nopatch
+    nopatch -->|retries remain| classify
+    nopatch -->|exhausted| end
+    validate -->|invalid| nopatch
+    validate -->|valid, not applied| reviewagent
+    reviewagent -->|reject + retries remain| classify
+    reviewagent -->|reject exhausted / needs_human / pass| review
     review --> decision
-    decision -->|approve| end
+    decision -->|approve| apply --> publish --> end
     decision -->|reject + feedback| classify
   end
 
@@ -85,6 +113,7 @@ flowchart TB
     repotools[repo_tools.py<br/>safe read / rg search]
     skilltools[skill_tools.py<br/>catalog / metadata / load selected skills]
     llmtools[llm_tools.py<br/>chat completion / diff extraction]
+    reviewtools[review_tools.py<br/>Code Review Agent prompt / JSON parse]
     testtools[test_tools.py<br/>SSH validation runner]
     artifacts[artifact_tools.py<br/>run files / JSON / reports]
   end
@@ -94,7 +123,7 @@ flowchart TB
     skills[skills/&lt;folder&gt;/SKILL.md<br/>NVIDIA Jetson BSP skills]
     repo[(User-specified BSP source repo<br/>working tree is patched directly)]
     target[Flashed Jetson target device<br/>SSH reachable]
-    humanbuild[Human-owned steps<br/>commit / push / build / flash]
+    humanbuild[Human-owned steps<br/>build / flash<br/>commit / push if auto-push is off]
   end
 
   subgraph runfiles[Run Artifacts<br/>runs/&lt;run_id&gt;]
@@ -109,7 +138,8 @@ flowchart TB
   user -->|init-run / review / approve / reject| cli --> wf --> graph
   graph --> tools
   select --> llmtools --> llm
-  propose --> llmtools --> llm
+  patchagent --> llmtools --> llm
+  reviewagent --> reviewtools --> llm
   skilltools --> skills
   repotools --> repo
   gittools --> repo
@@ -190,10 +220,29 @@ START
   -> select_skills
   -> load_skill
   -> inspect_repo
-  -> propose_patch
-  -> apply_patch | write_no_patch
+  -> patch_agent
+  -> validate_patch | write_no_patch
+  -> code_review_agent
+      -> classify_error   (reject, retries remain)
+      -> human_review     (reject exhausted / needs_human / pass)
   -> human_review
-  -> END | classify_error
+      -> apply_patch      (approve)
+      -> classify_error   (reject, retries remain)
+      -> END              (reject, retries exhausted -> report)
+  -> apply_patch
+  -> publish             (no-op unless AUTO_PUSH_ENABLED=true)
+  -> END                 (stage target_ready / published / publish_failed)
+```
+
+Key properties:
+
+```text
+validate_patch runs git apply --check only; nothing is applied during review.
+patch.md is written by validate_patch before any review.
+apply_patch runs only after human approval.
+Rejects never need rollback because nothing was applied.
+NO_PATCH and validation failures auto-retry until max_loops, then report.
+Code Review Agent reject auto-retries; exhausted rejects escalate to human.
 ```
 
 `human_review` is a real LangGraph `interrupt`.
@@ -226,9 +275,10 @@ Tool responsibilities:
 artifact_tools.py  -> run IDs, attempt dirs, JSON/text artifact writes
 git_tools.py       -> git status, diff, clean source gate, restore
 llm_tools.py       -> OpenAI-compatible chat completion, diff extraction
-patch_tools.py     -> diff validation, hunk normalization, git apply, reverse patch
+patch_tools.py     -> diff validation, hunk normalization, check/apply, reverse patch
 path_tools.py      -> path safety checks
-retry_tools.py     -> runtime retry context builder for patch prompts
+retry_tools.py     -> runtime retry context builder for LLM prompts
+review_tools.py    -> Code Review Agent (policy prompt, strict JSON parse, artifacts)
 repo_tools.py      -> safe file read/write, rg-based repo search
 skill_tools.py     -> skill catalog, metadata parsing, skill loading
 test_tools.py      -> SSH upload-and-run validation scripts
@@ -348,18 +398,74 @@ If the LLM output cannot be safely matched to the actual file contents, the agen
 
 This is intentional. A failed patch apply is safer than changing the wrong BSP file.
 
-## 5. Human Review
+## 5. Code Review Agent and Human Review
 
-After patch application or no-patch output, the graph enters:
+### Code Review Agent
+
+Implemented in:
 
 ```text
-human_review
+agent/tools/review_tools.py
+agent/prompts/code_review_policy.md
 ```
 
-This is a LangGraph interrupt. The CLI can resume it in three ways:
+After deterministic validation passes, the Code Review Agent reviews the
+validated, not-yet-applied diff. It is a second LLM-backed component with its
+own independent context:
+
+```text
+issue
+selected skills
+repo_inspection.md
+the proposed diff
+BSP review policy (agent/prompts/code_review_policy.md, editable)
+retry context from previous attempts
+```
+
+It never receives the Patch Agent prompt. Output is strict JSON:
+
+```json
+{
+  "decision": "pass | reject | needs_human",
+  "confidence": 0.9,
+  "findings": [],
+  "required_changes": []
+}
+```
+
+Routing:
+
+```text
+reject + retries remain  -> findings/required_changes enter retry context,
+                            new attempt, back to Patch Agent (no human)
+reject + exhausted       -> escalate to human_review (fallback)
+needs_human              -> human_review
+pass                     -> human_review (human approval always required)
+```
+
+Fail-safe: LLM errors or invalid JSON become `needs_human` so a broken
+reviewer can never auto-accept or silently burn the retry budget.
+
+Review settings:
+
+```text
+CODE_REVIEW_ENABLED=true
+```
+
+Artifacts per reviewed attempt:
+
+```text
+attempts/<n>/code_review.md
+attempts/<n>/review_agent_raw.json
+```
+
+### Human Review
+
+Human review remains in MVP as the safety gate and the escalation fallback.
+The graph enters `human_review` (a LangGraph interrupt) and the CLI resumes it:
 
 ```bash
-bsp-agent review --run runs/<run_id>
+bsp-agent review --run runs/<run_id>     # shows patch.md + code_review.md
 bsp-agent approve --run runs/<run_id>
 bsp-agent reject --run runs/<run_id> --feedback "..."
 ```
@@ -368,21 +474,22 @@ Approve:
 
 ```text
 human_review_status = approved
-stage = target_ready
-human manually commits/pushes/builds/flashes outside the agent
+apply_patch applies the diff from canonical patch.md
+publish is a no-op by default, leaving stage = target_ready
+if AUTO_PUSH_ENABLED=true, publish commits/pushes to bsp-agent/<run_id>
+human builds/flashes outside the agent
 ```
 
 Reject:
 
 ```text
-reverse current attempt patch
-record feedback
+record feedback (no rollback needed; nothing was applied)
 create next repair attempt
-rerun classify/select/load/inspect/propose/apply
-return to human_review
+rerun classify/select/load/inspect/patch_agent/validate/review
 ```
 
-Reject feedback is included in the next patch prompt so the LLM does not repeat the same rejected patch.
+Reject feedback and review findings are included in the next patch prompt so
+the Patch Agent does not repeat the same rejected patch.
 
 ## 6. Retry Context
 
@@ -410,7 +517,9 @@ artifacts on disk:
 previous attempts/*/patch.md          -> bounded patch excerpt
 previous attempts/*/no_patch.md       -> no-patch / patch failure reason
 attempt.validation_runs stdout/stderr -> bounded output tails
-state.json attempt fields             -> skills, changed files, statuses, feedback
+state.json attempt fields             -> skills, changed files, statuses,
+                                         human feedback, code review decision,
+                                         findings, required changes
 ```
 
 The compact per-attempt summary includes:
@@ -459,14 +568,38 @@ attempts/<n>/proposed_patch_prompt.md
 This makes the LLM input auditable without separate memory artifacts. It is
 written even when the LLM call fails, so failed attempts are debuggable.
 
-## 7. Human-Owned Publish / Build / Flash
+## 7. Publish / Build / Flash
 
-After approve, the agent does not commit or push.
+After approve, the agent applies the accepted patch. Commit/push is opt-in.
 
-Human-owned steps:
+Default behavior:
 
 ```text
 git add / commit / push
+build BSP
+flash Jetson target device
+```
+
+When enabled:
+
+```text
+AUTO_PUSH_ENABLED=true
+GIT_REMOTE=origin
+```
+
+the agent commits and pushes the applied patch to:
+
+```text
+bsp-agent/<run_id>
+```
+
+This is an implementation of `docs/adr/0002-agent-push-after-approval.md`.
+The agent never force-pushes and refuses protected branches such as `main` and
+`master`.
+
+Human-owned steps always remain:
+
+```text
 build BSP
 flash Jetson target device
 ```
@@ -523,15 +656,13 @@ runs/<run_id>/
   raw_logs/
   attempts/
     001/
-      error_classification.json
-      skill_catalog.json
-      skill_selection.json
       selected_skills.json
-      retrieved_skills.md
       repo_inspection.md
       proposed_patch_prompt.md
       proposed_patch_raw.md
       patch.md
+      code_review.md
+      review_agent_raw.json
       no_patch.md
       review.md
       target.json
@@ -540,15 +671,21 @@ runs/<run_id>/
           result.json
           stdout.txt
           stderr.txt
+      debug/
+        error_classification.json
+        skill_catalog.json
+        skill_selection.json
+        retrieved_skills.md
   report.md
 ```
 
 Not every artifact exists in every attempt. For example, a no-patch attempt has `no_patch.md` but no `patch.md`.
 
-`patch.md` is the canonical patch artifact. It contains the attempt number,
-the changed files, and one fenced diff block with the full unified diff. The
-agent extracts the diff from `patch.md` when it rolls back a rejected patch.
-There is no separate `patch.diff`, `patch_summary.md`, or `changed_files.json`.
+`patch.md` is the canonical patch artifact, written by `validate_patch` before
+any review. It contains the attempt number, the changed files, and one fenced
+diff block with the full unified diff. `apply_patch` extracts the diff from
+`patch.md` when the patch is accepted. There is no separate `patch.diff`,
+`patch_summary.md`, or `changed_files.json`.
 
 ## 10. Main File Map
 
@@ -699,7 +836,7 @@ cd /Users/jordan/bsp-agent
 Expected current result:
 
 ```text
-pytest: 32 passed
+pytest: 42 passed
 ruff: All checks passed
 ```
 
@@ -716,14 +853,17 @@ LLM skill selection using metadata catalog
 on-demand full SKILL.md loading
 real NVIDIA Jetson BSP skills copied into skills/
 clean source gate
-direct working tree patching
+validate-before-apply (review happens on unapplied diff; repo stays clean)
 diff parsing / validation / hunk normalization
-reject rollback and next-attempt loop
+Code Review Agent (independent context, strict JSON, policy file)
+auto-retry on NO_PATCH / validation failure / review reject
+exhausted review rejects escalate to human review
+apply on acceptance from canonical patch.md
 target registration
 SSH upload-and-run validation scripts
-runtime retry context injected into patch prompts
-canonical patch.md artifact (rollback extracts diff from patch.md)
+runtime retry context (incl. review findings) injected into patch prompts
 proposed_patch_prompt.md prompt auditing
+debug artifacts under attempts/<n>/debug/
 report generation
 unit and smoke tests
 ```
@@ -755,7 +895,7 @@ Direct working tree:
 ```text
 The MVP modifies the user-specified BSP source working tree directly.
 The repo must be clean before init-run.
-The agent does not commit or push.
+Commit/push is opt-in and goes to bsp-agent/<run_id>.
 ```
 
 Recorded in:
@@ -767,8 +907,9 @@ docs/adr/0001-direct-working-tree-for-mvp.md
 Human build/flash handoff:
 
 ```text
-The agent stops after approval.
-Human owns commit/push/build/flash.
+The agent stops after approval when auto-push is off.
+With auto-push on, the agent commits/pushes after approval.
+Human owns build/flash.
 Agent resumes only after register-target.
 ```
 

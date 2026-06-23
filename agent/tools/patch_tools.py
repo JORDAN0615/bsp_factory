@@ -31,7 +31,8 @@ def validate_unified_diff(diff_text: str, allow_new_files: bool = False) -> None
         raise PatchError("MVP does not allow patches that create files.")
 
 
-def apply_patch(repo_path: str | Path, diff_text: str) -> None:
+def check_patch(repo_path: str | Path, diff_text: str) -> None:
+    """Validate the diff and run git apply --check without applying it."""
     diff_text = _ensure_trailing_newline(diff_text)
     validate_unified_diff(diff_text)
     check = subprocess.run(
@@ -43,6 +44,11 @@ def apply_patch(repo_path: str | Path, diff_text: str) -> None:
     )
     if check.returncode != 0:
         raise PatchError(check.stderr.strip() or "git apply --check failed")
+
+
+def apply_patch(repo_path: str | Path, diff_text: str) -> None:
+    diff_text = _ensure_trailing_newline(diff_text)
+    check_patch(repo_path, diff_text)
     apply = subprocess.run(
         ["git", "-C", str(repo_path), "apply"],
         input=diff_text,

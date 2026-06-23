@@ -16,9 +16,9 @@ git -C /tmp/bsp-agent-init-camera-smoke-
   repo restore .
 
 bsp-agent init-run \
-  --repo /tmp/bsp-agent-init-camera-smoke-repo \
-  --issue "camera probe failed with i2c -121" \
-  --log ./dmesg.txt
+  --repo /path/to/your/real/bsp-repo \
+  --issue "你的實際問題描述" \
+  --log /path/to/dmesg.txt
 
 bsp-agent show-diff --run runs/<run_id>
 bsp-agent approve --run runs/<run_id>

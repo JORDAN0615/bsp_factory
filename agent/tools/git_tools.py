@@ -52,3 +52,43 @@ def current_head(repo_path: str | Path) -> str:
 def restore_files(repo_path: str | Path, files: list[str]) -> None:
     if files:
         run_git(repo_path, ["restore", "--", *files])
+
+
+def current_branch(repo_path: str | Path) -> str:
+    return run_git(repo_path, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+
+
+def checkout_branch(repo_path: str | Path, name: str, create: bool = False) -> None:
+    if not name.strip() or any(char.isspace() for char in name):
+        raise GitError("branch name must be non-empty and whitespace-free")
+    args = ["checkout", "-b", name] if create else ["checkout", name]
+    run_git(repo_path, args)
+
+
+def commit_all(repo_path: str | Path, message: str) -> str:
+    if not message.strip():
+        raise GitError("commit message must be non-empty")
+    if not get_git_status(repo_path).strip():
+        raise GitError("nothing to commit")
+    run_git(repo_path, ["add", "-A"])
+    run_git(repo_path, ["commit", "-m", message])
+    return run_git(repo_path, ["rev-parse", "HEAD"]).stdout.strip()
+
+
+def push_branch(
+    repo_path: str | Path,
+    remote: str,
+    branch: str,
+    set_upstream: bool = True,
+) -> None:
+    if not remote.strip() or any(char.isspace() for char in remote):
+        raise GitError("remote must be non-empty and whitespace-free")
+    if not branch.strip() or any(char.isspace() for char in branch):
+        raise GitError("branch must be non-empty and whitespace-free")
+    if branch in {"main", "master"}:
+        raise GitError(f"refusing to push protected branch {branch}")
+    args = ["push"]
+    if set_upstream:
+        args.append("-u")
+    args.extend([remote, branch])
+    run_git(repo_path, args)

@@ -57,6 +57,12 @@ def _render_attempt(state: BSPAgentState, attempt: RepairAttempt) -> str:
         f"- Changed files: `{', '.join(attempt.changed_files) or 'none'}`",
         f"- Human review: `{attempt.human_review_status}`",
     ]
+    if attempt.code_review_decision:
+        lines.append(f"- Code review decision: `{attempt.code_review_decision}`")
+        for finding in attempt.code_review_findings:
+            lines.append(f"- Code review finding: {_one_line(finding, _FEEDBACK_MAX_CHARS)}")
+        for change in attempt.code_review_required_changes:
+            lines.append(f"- Code review required change: {_one_line(change, _FEEDBACK_MAX_CHARS)}")
     if attempt.human_feedback:
         lines.append(f"- Human feedback: {_one_line(attempt.human_feedback, _FEEDBACK_MAX_CHARS)}")
     no_patch_reason = _no_patch_reason(path)

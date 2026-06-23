@@ -15,15 +15,17 @@ from langgraph.types import Command, interrupt
 from agent.config import Settings
 from agent.state import BSPAgentState
 from agent.tools.artifact_tools import write_json, write_text
-from agent.tools.llm_tools import LLMConfig, LLMError, chat_completion
+from agent.tools.git_tools import GitError, checkout_branch, commit_all, push_branch
+from agent.tools.llm_tools import LLMConfig, LLMError, chat_completion, strip_json_fence
 from agent.tools.patch_tools import (
     PatchError,
     apply_patch,
     changed_files_from_diff,
+    check_patch,
     extract_diff_from_patch_md,
     normalize_hunk_headers,
-    reverse_patch,
 )
+from agent.tools.review_tools import run_code_review
 from agent.tools.repo_tools import list_candidate_files
 from agent.tools.skill_tools import (
     build_skill_catalog,
@@ -43,6 +45,9 @@ class RepairGraphState(TypedDict, total=False):
     repo_inspection: str
     diff_text: str
     no_patch_reason: str | None
+    validate_route: str
+    no_patch_route: str
+    review_agent_route: str
     review_route: str
 
 
@@ -52,31 +57,57 @@ def build_repair_graph(checkpointer=None):
     graph.add_node("select_skills", select_skills_node)
     graph.add_node("load_skill", load_skill_node)
     graph.add_node("inspect_repo", inspect_repo_node)
-    graph.add_node("propose_patch", propose_patch_node)
+    graph.add_node("patch_agent", patch_agent_node)
     graph.add_node("write_no_patch", write_no_patch_node)
-    graph.add_node("apply_patch", apply_patch_node)
+    graph.add_node("validate_patch", validate_patch_node)
+    graph.add_node("code_review_agent", code_review_agent_node)
     graph.add_node("human_review", human_review_node)
+    graph.add_node("apply_patch", apply_patch_node)
+    graph.add_node("publish", publish_node)
 
     graph.add_edge(START, "classify_error")
     graph.add_edge("classify_error", "select_skills")
     graph.add_edge("select_skills", "load_skill")
     graph.add_edge("load_skill", "inspect_repo")
-    graph.add_edge("inspect_repo", "propose_patch")
+    graph.add_edge("inspect_repo", "patch_agent")
     graph.add_conditional_edges(
-        "propose_patch",
-        route_after_propose_patch,
-        {"write_no_patch": "write_no_patch", "apply_patch": "apply_patch"},
+        "patch_agent",
+        route_after_patch_agent,
+        {"write_no_patch": "write_no_patch", "validate_patch": "validate_patch"},
     )
-    graph.add_edge("write_no_patch", "human_review")
-    graph.add_edge("apply_patch", "human_review")
+    graph.add_conditional_edges(
+        "write_no_patch",
+        route_after_no_patch,
+        {"classify_error": "classify_error", "end": END},
+    )
+    graph.add_conditional_edges(
+        "validate_patch",
+        route_after_validate_patch,
+        {
+            "write_no_patch": "write_no_patch",
+            "code_review_agent": "code_review_agent",
+            "human_review": "human_review",
+        },
+    )
+    graph.add_conditional_edges(
+        "code_review_agent",
+        route_after_code_review,
+        {
+            "classify_error": "classify_error",
+            "human_review": "human_review",
+        },
+    )
     graph.add_conditional_edges(
         "human_review",
         route_after_human_review,
         {
-            "end": END,
+            "apply_patch": "apply_patch",
             "classify_error": "classify_error",
+            "end": END,
         },
     )
+    graph.add_edge("apply_patch", "publish")
+    graph.add_edge("publish", END)
     return graph.compile(checkpointer=checkpointer)
 
 
@@ -107,7 +138,7 @@ def resume_review_graph(
 ) -> BSPAgentState:
     with _sqlite_checkpointer(state) as checkpointer:
         result = build_repair_graph(checkpointer).invoke(
-            Command(resume=decision),
+            Command(resume=decision, update={"settings": settings}),
             config=_graph_config(state),
         )
     if result and "state" in result:
@@ -127,7 +158,7 @@ def classify_error_node(graph_state: RepairGraphState) -> RepairGraphState:
     attempt.suspected_areas = list(classification.get("suspected_areas", []))
     from agent.nodes.workflow import _attempt_dir
 
-    write_json(_attempt_dir(state) / "error_classification.json", classification)
+    write_json(_attempt_dir(state) / "debug" / "error_classification.json", classification)
     _save_state(state)
     return {"state": state}
 
@@ -145,12 +176,12 @@ def select_skills_node(graph_state: RepairGraphState) -> RepairGraphState:
     from agent.nodes.workflow import _attempt_dir
     from agent.tools.artifact_tools import read_json
 
-    classification_path = _attempt_dir(state) / "error_classification.json"
+    classification_path = _attempt_dir(state) / "debug" / "error_classification.json"
     if classification_path.exists():
         classification = read_json(classification_path)
     state.stage = "select_skills"
     catalog = build_skill_catalog(settings.skills_dir)
-    write_json(_attempt_dir(state) / "skill_catalog.json", catalog)
+    write_json(_attempt_dir(state) / "debug" / "skill_catalog.json", catalog)
     selection = _select_skills_with_llm(state, settings, classification, catalog)
     selected = validate_selected_skills(
         selection.get("selected_skills", []),
@@ -168,7 +199,7 @@ def select_skills_node(graph_state: RepairGraphState) -> RepairGraphState:
             "fallback": True,
         }
     attempt.selected_skills = selected
-    write_json(_attempt_dir(state) / "skill_selection.json", selection)
+    write_json(_attempt_dir(state) / "debug" / "skill_selection.json", selection)
     write_json(_attempt_dir(state) / "selected_skills.json", attempt.selected_skills)
     _save_state(state)
     return {"state": state}
@@ -184,7 +215,10 @@ def load_skill_node(graph_state: RepairGraphState) -> RepairGraphState:
         skill_text = load_selected_skills(settings.skills_dir, attempt.selected_skills)
     from agent.nodes.workflow import _attempt_dir
 
-    write_text(_attempt_dir(state) / "retrieved_skills.md", skill_text or "(No skills selected.)\n")
+    write_text(
+        _attempt_dir(state) / "debug" / "retrieved_skills.md",
+        skill_text or "(No skills selected.)\n",
+    )
     _save_state(state)
     return {"state": state, "skill_text": skill_text}
 
@@ -203,7 +237,7 @@ def inspect_repo_node(graph_state: RepairGraphState) -> RepairGraphState:
     return {"state": state, "repo_inspection": repo_inspection}
 
 
-def propose_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
+def patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
     state = graph_state["state"]
     settings = graph_state["settings"]
     attempt = state.current_attempt
@@ -221,10 +255,10 @@ def propose_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
     return {"state": state, "diff_text": diff_text, "no_patch_reason": no_patch_reason}
 
 
-def route_after_propose_patch(graph_state: RepairGraphState) -> Literal["write_no_patch", "apply_patch"]:
+def route_after_patch_agent(graph_state: RepairGraphState) -> Literal["write_no_patch", "validate_patch"]:
     if graph_state.get("no_patch_reason") or graph_state.get("diff_text") == "NO_PATCH":
         return "write_no_patch"
-    return "apply_patch"
+    return "validate_patch"
 
 
 def write_no_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
@@ -233,38 +267,100 @@ def write_no_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
     from agent.nodes.workflow import _write_no_patch
 
     _write_no_patch(state, graph_state.get("no_patch_reason") or "No safe patch was proposed.")
-    attempt.patch_status = "no_patch"
-    state.stage = "human_review"
+    if attempt.patch_status != "failed":
+        attempt.patch_status = "no_patch"
+    if len(state.attempts) >= state.max_loops:
+        state.stage = "report"
+        _save_state(state)
+        return {"state": state, "no_patch_route": "end"}
+    state.new_attempt()
+    state.stage = "classify_error"
     _save_state(state)
-    return {"state": state}
+    return {"state": state, "no_patch_route": "classify_error", "no_patch_reason": None, "diff_text": ""}
 
 
-def apply_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
+def route_after_no_patch(graph_state: RepairGraphState) -> Literal["classify_error", "end"]:
+    if graph_state.get("no_patch_route") == "classify_error":
+        return "classify_error"
+    return "end"
+
+
+def validate_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
     state = graph_state["state"]
     attempt = state.current_attempt
-    state.stage = "apply_patch"
+    state.stage = "validate_patch"
     diff_text = graph_state.get("diff_text", "")
-    from agent.nodes.workflow import _attempt_dir, _patch_markdown, _write_no_patch
+    from agent.nodes.workflow import _attempt_dir, _patch_markdown
 
     try:
         diff_text = normalize_hunk_headers(state.repo_path, diff_text)
-        apply_patch(state.repo_path, diff_text)
+        check_patch(state.repo_path, diff_text)
     except PatchError as exc:
-        _write_no_patch(state, f"Patch validation or apply failed: {exc}")
         attempt.patch_status = "failed"
-        state.stage = "failed"
         _save_state(state)
-        return {"state": state}
+        return {
+            "state": state,
+            "no_patch_reason": f"Patch validation failed: {exc}",
+            "validate_route": "write_no_patch",
+        }
 
     attempt.changed_files = changed_files_from_diff(diff_text)
     write_text(
         _attempt_dir(state) / "patch.md",
         _patch_markdown(attempt, diff_text),
     )
-    attempt.patch_status = "applied"
-    state.stage = "human_review"
+    attempt.patch_status = "generated"
     _save_state(state)
-    return {"state": state, "diff_text": diff_text}
+    return {"state": state, "diff_text": diff_text, "validate_route": "code_review_agent"}
+
+
+def route_after_validate_patch(
+    graph_state: RepairGraphState,
+) -> Literal["write_no_patch", "code_review_agent", "human_review"]:
+    if graph_state.get("validate_route") == "write_no_patch":
+        return "write_no_patch"
+    if graph_state["settings"].code_review_enabled:
+        return "code_review_agent"
+    return "human_review"
+
+
+def code_review_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
+    state = graph_state["state"]
+    settings = graph_state["settings"]
+    attempt = state.current_attempt
+    state.stage = "code_review"
+    review = run_code_review(
+        state,
+        attempt,
+        graph_state.get("diff_text", ""),
+        graph_state.get("repo_inspection", ""),
+        settings,
+    )
+    if review["decision"] == "reject":
+        if len(state.attempts) >= state.max_loops:
+            # Retry budget exhausted: escalate to human review as the fallback.
+            _save_state(state)
+            return {"state": state, "review_agent_route": "human_review"}
+        state.new_attempt()
+        state.stage = "classify_error"
+        _save_state(state)
+        return {
+            "state": state,
+            "review_agent_route": "classify_error",
+            "no_patch_reason": None,
+            "diff_text": "",
+        }
+    _save_state(state)
+    return {"state": state, "review_agent_route": "human_review"}
+
+
+def route_after_code_review(
+    graph_state: RepairGraphState,
+) -> Literal["classify_error", "human_review"]:
+    route = graph_state.get("review_agent_route")
+    if route == "classify_error":
+        return "classify_error"
+    return "human_review"
 
 
 def human_review_node(graph_state: RepairGraphState) -> RepairGraphState:
@@ -282,29 +378,25 @@ def human_review_node(graph_state: RepairGraphState) -> RepairGraphState:
         "patch_status": attempt.patch_status,
         "changed_files": attempt.changed_files,
         "patch_path": str(_attempt_dir(state) / "patch.md"),
-        "no_patch_path": str(_attempt_dir(state) / "no_patch.md"),
+        "code_review_path": str(_attempt_dir(state) / "code_review.md"),
+        "code_review_decision": attempt.code_review_decision,
         "message": "Review the patch and resume with approve or reject.",
     }
     decision = interrupt(payload)
     action = decision.get("action") if isinstance(decision, dict) else None
     if action == "approve":
-        if attempt.patch_status == "no_patch":
-            raise RuntimeError("Cannot approve a NO_PATCH attempt.")
+        if attempt.patch_status != "generated":
+            raise RuntimeError(
+                f"Cannot approve attempt with patch status {attempt.patch_status}."
+            )
         attempt.human_review_status = "approved"
-        state.stage = "target_ready"
-        from agent.nodes.workflow import _attempt_dir
-
         (_attempt_dir(state) / "review.md").write_text("Status: approved\n", encoding="utf-8")
         _save_state(state)
-        return {"state": state, "review_route": "end"}
+        return {"state": state, "review_route": "apply_patch"}
     if action == "reject":
         feedback = ""
         if isinstance(decision, dict):
             feedback = str(decision.get("feedback") or "")
-        if attempt.patch_status == "applied":
-            patch_path = _attempt_dir(state) / "patch.md"
-            diff_text = extract_diff_from_patch_md(patch_path.read_text(encoding="utf-8"))
-            reverse_patch(state.repo_path, diff_text)
         attempt.human_review_status = "rejected"
         attempt.human_feedback = feedback
         (_attempt_dir(state) / "review.md").write_text(
@@ -317,15 +409,100 @@ def human_review_node(graph_state: RepairGraphState) -> RepairGraphState:
         state.new_attempt()
         state.stage = "classify_error"
         _save_state(state)
-        return {"state": state, "review_route": "classify_error"}
+        return {
+            "state": state,
+            "review_route": "classify_error",
+            "no_patch_reason": None,
+            "diff_text": "",
+        }
     raise RuntimeError(f"Unknown human review action: {action}")
 
 
-def route_after_human_review(graph_state: RepairGraphState) -> Literal["end", "classify_error"]:
+def route_after_human_review(
+    graph_state: RepairGraphState,
+) -> Literal["apply_patch", "classify_error", "end"]:
     route = graph_state.get("review_route")
     if route == "classify_error":
         return "classify_error"
+    if route == "apply_patch":
+        return "apply_patch"
     return "end"
+
+
+def apply_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
+    """Apply the accepted patch from canonical patch.md to the working tree."""
+    state = graph_state["state"]
+    attempt = state.current_attempt
+    state.stage = "apply_patch"
+    from agent.nodes.workflow import _attempt_dir, _write_no_patch
+
+    patch_path = _attempt_dir(state) / "patch.md"
+    try:
+        diff_text = extract_diff_from_patch_md(patch_path.read_text(encoding="utf-8"))
+        apply_patch(state.repo_path, diff_text)
+    except PatchError as exc:
+        _write_no_patch(state, f"Accepted patch failed to apply: {exc}")
+        attempt.patch_status = "failed"
+        state.stage = "failed"
+        _save_state(state)
+        return {"state": state}
+    attempt.patch_status = "applied"
+    state.stage = "target_ready"
+    _save_state(state)
+    return {"state": state}
+
+
+def publish_node(graph_state: RepairGraphState) -> RepairGraphState:
+    state = graph_state["state"]
+    settings = graph_state["settings"]
+    attempt = state.current_attempt
+    if attempt.patch_status != "applied":
+        _save_state(state)
+        return {"state": state}
+    if not settings.auto_push_enabled:
+        _save_state(state)
+        return {"state": state}
+
+    state.stage = "publish"
+    branch = f"bsp-agent/{state.run_id}"
+    attempt.published_branch = branch
+    from agent.nodes.workflow import _publish_commit_message, _write_publish_artifact
+
+    # Commit step. published_commit being set means commit succeeded; the CLI uses
+    # that to tell whether a failure happened at the commit or the push stage.
+    try:
+        try:
+            checkout_branch(state.repo_path, branch, create=True)
+        except GitError as exc:
+            if "already exists" not in str(exc):
+                raise
+            checkout_branch(state.repo_path, branch, create=False)
+        sha = commit_all(state.repo_path, _publish_commit_message(state, attempt))
+    except GitError as exc:
+        attempt.publish_status = "failed"
+        attempt.publish_error = str(exc)
+        state.stage = "publish_failed"
+        _write_publish_artifact(state, attempt, settings.git_remote)
+        _save_state(state)
+        return {"state": state}
+    attempt.published_commit = sha
+
+    # Push step.
+    try:
+        push_branch(state.repo_path, settings.git_remote, branch)
+    except GitError as exc:
+        attempt.publish_status = "failed"
+        attempt.publish_error = str(exc)
+        state.stage = "publish_failed"
+        _write_publish_artifact(state, attempt, settings.git_remote)
+        _save_state(state)
+        return {"state": state}
+
+    attempt.publish_status = "pushed"
+    state.stage = "published"
+    _write_publish_artifact(state, attempt, settings.git_remote)
+    _save_state(state)
+    return {"state": state}
 
 
 def _select_skills_with_llm(
@@ -374,7 +551,7 @@ def _select_skills_with_llm(
             "fallback": True,
         }
     try:
-        parsed = json.loads(_strip_json_fence(raw))
+        parsed = json.loads(strip_json_fence(raw))
     except json.JSONDecodeError:
         return {
             "selected_skills": [],
@@ -393,18 +570,6 @@ def _select_skills_with_llm(
         }
     parsed["raw_response"] = raw
     return parsed
-
-
-def _strip_json_fence(text: str) -> str:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-    return cleaned
 
 
 def _save_state(state: BSPAgentState) -> None:

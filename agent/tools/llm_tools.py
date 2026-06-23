@@ -46,6 +46,18 @@ def chat_completion(config: LLMConfig, messages: list[dict[str, str]], timeout_s
         raise LLMError(f"Unexpected LLM response: {data}") from exc
 
 
+def strip_json_fence(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    return cleaned
+
+
 def extract_diff_or_no_patch(text: str) -> tuple[str, str | None]:
     cleaned = text.strip()
     if "```" in cleaned:

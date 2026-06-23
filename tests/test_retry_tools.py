@@ -83,6 +83,23 @@ def test_retry_context_excludes_current_attempt(tmp_path: Path) -> None:
     assert "## Attempt 002" not in text
 
 
+def test_retry_context_includes_code_review_feedback(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    first = state.new_attempt()
+    first.patch_status = "generated"
+    first.code_review_decision = "reject"
+    first.code_review_confidence = 0.8
+    first.code_review_findings = ["invented regulator name"]
+    first.code_review_required_changes = ["use regulators present in the inspected source"]
+    state.new_attempt()
+
+    text = build_retry_context(state)
+
+    assert "Code review decision: `reject`" in text
+    assert "invented regulator name" in text
+    assert "use regulators present in the inspected source" in text
+
+
 def test_retry_context_extracts_no_patch_reason(tmp_path: Path) -> None:
     state = make_state(tmp_path)
     first = state.new_attempt()
