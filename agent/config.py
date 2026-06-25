@@ -23,8 +23,9 @@ class Settings(BaseSettings):
     auto_push_enabled: bool = Field(default=False, alias="AUTO_PUSH_ENABLED")
     git_remote: str = Field(default="origin", alias="GIT_REMOTE")
     bsp_base_branch: str = Field(default="", alias="BSP_BASE_BRANCH")
-    github_webhook_secret: str = Field(default="", alias="GITHUB_WEBHOOK_SECRET")
-    github_token: str = Field(default="", alias="GITHUB_TOKEN")
+    gitlab_webhook_token: str = Field(default="", alias="GITLAB_WEBHOOK_TOKEN")
+    gitlab_token: str = Field(default="", alias="GITLAB_TOKEN")
+    gitlab_api_url: str = Field(default="https://gitlab.com/api/v4", alias="GITLAB_API_URL")
     bsp_repo_path: Path = Field(default=Path("."), alias="BSP_REPO_PATH")
 
 

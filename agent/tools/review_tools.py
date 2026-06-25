@@ -36,6 +36,7 @@ def run_code_review(
             LLMConfig(settings.llm_base_url, settings.llm_api_key, settings.llm_model),
             messages,
             timeout_sec=60,
+            name="code_review_agent",
         )
         review = _parse_review(raw)
     except LLMError as exc:

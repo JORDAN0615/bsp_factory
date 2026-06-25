@@ -12,6 +12,7 @@ from agent.nodes.workflow import (
     continue_run,
     create_run,
     generate_report,
+    list_pending_runs,
     register_target,
     reject_run,
     run_validation,
@@ -165,6 +166,21 @@ def unlock() -> None:
 
     run_lock.release_active(get_settings().runs_dir)
     console.print("Cleared the active-run marker.")
+
+
+@app.command("pending")
+def pending() -> None:
+    rows = list_pending_runs(get_settings())
+    if not rows:
+        console.print("No runs are waiting for approval.")
+        return
+    for row in rows:
+        issue = f"GitLab #{row['issue_no']}" if row["issue_no"] else "(no issue)"
+        console.print(f"[bold]{row['run_id']}[/bold]  {issue}")
+        console.print(f"  review={row['code_review']} files={row['changed_files']}")
+        console.print(f"  {row['issue_first_line']}")
+        console.print(f"  .venv/bin/bsp-agent review --run {row['run_dir']}")
+        console.print("")
 
 
 def _review_prompt(run: Path) -> None:

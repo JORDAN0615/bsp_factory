@@ -11,7 +11,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from agent.config import get_settings
 from agent.nodes.workflow import create_run
 from agent import run_lock
-from agent.webhook import build_issue_text, extract_log_block, verify_signature
+from agent.webhook import build_issue_text, build_notes_url, extract_log_block, verify_token
 
 
 logger = logging.getLogger(__name__)
@@ -41,28 +41,33 @@ def health() -> dict[str, str]:
 @app.post("/webhook/github")
 async def github_webhook(request: Request, background: BackgroundTasks) -> Response:
     raw = await request.body()
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    if not verify_signature(settings.github_webhook_secret, raw, signature):
-        raise HTTPException(status_code=401, detail="invalid signature")
-    if request.headers.get("X-GitHub-Event") != "issues":
+    header_token = request.headers.get("X-Gitlab-Token", "")
+    if not verify_token(settings.gitlab_webhook_token, header_token):
+        raise HTTPException(status_code=401, detail="invalid token")
+    if request.headers.get("X-Gitlab-Event") != "Issue Hook":
         return Response(status_code=204)
     payload = json.loads(raw)
-    if payload.get("action") != "opened":
+    if payload.get("object_kind") != "issue":
         return Response(status_code=204)
-    delivery = request.headers.get("X-GitHub-Delivery", "")
+    object_attributes = payload.get("object_attributes", {})
+    if object_attributes.get("action") != "open":
+        return Response(status_code=204)
+    delivery = request.headers.get("X-Gitlab-Event-UUID", "")
     if _already_processed(delivery):
         return Response(status_code=200)
     if not run_lock.acquire_active(settings.runs_dir):
         logger.info("a run is already in progress; rejecting delivery %s", delivery)
-        return Response(status_code=202)
-    issue = payload["issue"]
-    issue_text = build_issue_text(issue.get("title"), issue.get("body"))
-    log_text = extract_log_block(issue.get("body"))
-    background.add_task(run_issue, issue_text, log_text, issue.get("comments_url"))
+        return Response(status_code=409)
+    description = object_attributes.get("description")
+    issue_text = build_issue_text(object_attributes.get("title"), description)
+    log_text = extract_log_block(description)
+    project_id = payload.get("project", {}).get("id")
+    notes_url = build_notes_url(settings.gitlab_api_url, project_id, object_attributes.get("iid"))
+    background.add_task(run_issue, issue_text, log_text, notes_url)
     return Response(status_code=202)
 
 
-def run_issue(issue_text: str, log_text: str | None, comments_url: str | None) -> None:
+def run_issue(issue_text: str, log_text: str | None, notes_url: str | None) -> None:
     with _RUN_LOCK:
         logs: list[Path] = []
         if log_text:
@@ -77,10 +82,10 @@ def run_issue(issue_text: str, log_text: str | None, comments_url: str | None) -
                 issue=issue_text,
                 logs=logs,
                 settings=settings,
-                github_comments_url=comments_url,
+                issue_notes_url=notes_url,
             )
             if state.stage == "report":
                 run_lock.release_active(settings.runs_dir)
         except Exception:
             run_lock.release_active(settings.runs_dir)
-            logger.exception("GitHub webhook repair run failed")
+            logger.exception("GitLab webhook repair run failed")

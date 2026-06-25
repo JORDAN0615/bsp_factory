@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import hmac
 import re
 
@@ -8,11 +7,10 @@ import re
 _FENCE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
 
-def verify_signature(secret: str, body: bytes, signature_header: str) -> bool:
-    if not secret or not signature_header.startswith("sha256="):
+def verify_token(expected: str, header_token: str) -> bool:
+    if not expected:
         return False
-    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature_header)
+    return hmac.compare_digest(expected, header_token)
 
 
 def extract_log_block(body: str | None) -> str | None:
@@ -26,3 +24,7 @@ def extract_log_block(body: str | None) -> str | None:
 
 def build_issue_text(title: str | None, body: str | None) -> str:
     return f"{title or ''}\n\n{body or ''}".strip()
+
+
+def build_notes_url(api_url: str, project_id, issue_iid) -> str:
+    return f"{api_url.rstrip('/')}/projects/{project_id}/issues/{issue_iid}/notes"

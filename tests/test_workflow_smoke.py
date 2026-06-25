@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agent.config import Settings
 from agent import run_lock
-from agent.nodes.workflow import approve_run, create_run, reject_run
+from agent.nodes.workflow import approve_run, create_run, list_pending_runs, reject_run
 from agent.nodes.workflow import _keywords_for_attempt
 from agent.state import BSPAgentState
 from agent.tools.git_tools import GitError
@@ -44,8 +44,8 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "llm_base_url": "LLM_BASE_URL",
         "llm_api_key": "LLM_API_KEY",
         "llm_model": "LLM_MODEL",
-        "github_token": "GITHUB_TOKEN",
-        "github_webhook_secret": "GITHUB_WEBHOOK_SECRET",
+        "gitlab_token": "GITLAB_TOKEN",
+        "gitlab_webhook_token": "GITLAB_WEBHOOK_TOKEN",
         "bsp_repo_path": "BSP_REPO_PATH",
         "bsp_base_branch": "BSP_BASE_BRANCH",
     }
@@ -61,8 +61,8 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "validation_dir": Path("tests/validation"),
         "AUTO_PUSH_ENABLED": False,
         "GIT_REMOTE": "origin",
-        "GITHUB_TOKEN": "",
-        "GITHUB_WEBHOOK_SECRET": "",
+        "GITLAB_TOKEN": "",
+        "GITLAB_WEBHOOK_TOKEN": "",
         "BSP_REPO_PATH": tmp_path / "repo",
         "BSP_BASE_BRANCH": "",
     }
@@ -227,6 +227,35 @@ def test_approve_applies_patch_after_review(tmp_path: Path, monkeypatch) -> None
     assert (attempt_dir / "review.md").read_text(encoding="utf-8") == "Status: approved\n"
 
 
+def test_list_pending_runs_only_returns_human_review_runs(tmp_path: Path, monkeypatch) -> None:
+    repo = make_repo(tmp_path)
+    settings = make_settings(tmp_path)
+    fake = dispatch_fake([PATCH_OKAY], [REVIEW_PASS])
+    patch_llm(monkeypatch, fake)
+
+    state = create_run(
+        repo=repo,
+        issue="camera probe failed\nextra details",
+        logs=[make_log(tmp_path)],
+        settings=settings,
+        issue_notes_url="https://gitlab.example/api/v4/projects/42/issues/7/notes",
+    )
+
+    rows = list_pending_runs(settings)
+
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == state.run_id
+    assert rows[0]["issue_no"] == "7"
+    assert rows[0]["changed_files"] == ["board.dts"]
+    assert rows[0]["code_review"] == "pass"
+    assert rows[0]["issue_first_line"] == "camera probe failed"
+
+    state.stage = "target_ready"
+    state.save()
+
+    assert list_pending_runs(settings) == []
+
+
 def test_approve_with_auto_push_publishes_branch(tmp_path: Path, monkeypatch) -> None:
     repo = make_repo(tmp_path)
     bare = tmp_path / "origin.git"
@@ -310,7 +339,7 @@ def test_managed_no_patch_deletes_empty_work_branch(tmp_path: Path) -> None:
     assert branches.strip() == ""
 
 
-def test_published_webhook_run_posts_github_comment(tmp_path: Path, monkeypatch) -> None:
+def test_published_webhook_run_posts_gitlab_note(tmp_path: Path, monkeypatch) -> None:
     repo = make_repo(tmp_path)
     bare = tmp_path / "origin.git"
     add_pushable_origin(repo, bare)
@@ -318,17 +347,17 @@ def test_published_webhook_run_posts_github_comment(tmp_path: Path, monkeypatch)
         tmp_path,
         AUTO_PUSH_ENABLED=True,
         GIT_REMOTE="origin",
-        GITHUB_TOKEN="token",
+        GITLAB_TOKEN="token",
     )
     fake = dispatch_fake([PATCH_OKAY], [REVIEW_PASS])
     patch_llm(monkeypatch, fake)
-    comments: list[tuple[str | None, str, str]] = []
+    notes: list[tuple[str | None, str, str]] = []
 
-    def fake_comment(comments_url: str | None, token: str, body: str) -> bool:
-        comments.append((comments_url, token, body))
+    def fake_note(notes_url: str | None, token: str, body: str) -> bool:
+        notes.append((notes_url, token, body))
         return True
 
-    monkeypatch.setattr("agent.tools.github_tools.post_issue_comment", fake_comment)
+    monkeypatch.setattr("agent.tools.gitlab_tools.post_issue_note", fake_note)
     assert run_lock.acquire_active(settings.runs_dir)
 
     state = create_run(
@@ -336,32 +365,32 @@ def test_published_webhook_run_posts_github_comment(tmp_path: Path, monkeypatch)
         issue="camera probe failed",
         logs=[make_log(tmp_path)],
         settings=settings,
-        github_comments_url="https://api.github.test/comments",
+        issue_notes_url="https://gitlab.example/api/v4/projects/42/issues/7/notes",
     )
-    assert comments == []
+    assert notes == []
 
     state = approve_run(state.run_dir, settings)
 
     assert state.stage == "published"
-    assert len(comments) == 1
-    assert comments[0][0] == "https://api.github.test/comments"
-    assert comments[0][1] == "token"
-    assert f"`{state.run_id}`" in comments[0][2]
-    assert f"`bsp-agent/{state.run_id}`" in comments[0][2]
+    assert len(notes) == 1
+    assert notes[0][0] == "https://gitlab.example/api/v4/projects/42/issues/7/notes"
+    assert notes[0][1] == "token"
+    assert f"`{state.run_id}`" in notes[0][2]
+    assert f"`bsp-agent/{state.run_id}`" in notes[0][2]
     assert not run_lock.is_active(settings.runs_dir)
 
 
-def test_target_ready_webhook_run_does_not_post_github_comment(
+def test_target_ready_webhook_run_does_not_post_gitlab_note(
     tmp_path: Path, monkeypatch
 ) -> None:
     repo = make_repo(tmp_path)
-    settings = make_settings(tmp_path, GITHUB_TOKEN="token")
+    settings = make_settings(tmp_path, GITLAB_TOKEN="token")
     fake = dispatch_fake([PATCH_OKAY], [REVIEW_PASS])
     patch_llm(monkeypatch, fake)
-    comments: list[str] = []
+    notes: list[str] = []
     monkeypatch.setattr(
-        "agent.tools.github_tools.post_issue_comment",
-        lambda *args, **kwargs: comments.append("called") or True,
+        "agent.tools.gitlab_tools.post_issue_note",
+        lambda *args, **kwargs: notes.append("called") or True,
     )
 
     state = create_run(
@@ -369,12 +398,12 @@ def test_target_ready_webhook_run_does_not_post_github_comment(
         issue="camera probe failed",
         logs=[make_log(tmp_path)],
         settings=settings,
-        github_comments_url="https://api.github.test/comments",
+        issue_notes_url="https://gitlab.example/api/v4/projects/42/issues/7/notes",
     )
     state = approve_run(state.run_dir, settings)
 
     assert state.stage == "target_ready"
-    assert comments == []
+    assert notes == []
 
 
 def test_human_reject_creates_new_attempt_without_rollback(tmp_path: Path, monkeypatch) -> None:

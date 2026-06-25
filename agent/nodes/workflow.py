@@ -42,7 +42,7 @@ def create_run(
     issue: str,
     logs: list[Path],
     settings: Settings,
-    github_comments_url: str | None = None,
+    issue_notes_url: str | None = None,
 ) -> BSPAgentState:
     ensure_git_repo(repo)
     ensure_clean_source(repo)
@@ -62,7 +62,7 @@ def create_run(
         input_logs=copied_logs,
         max_loops=settings.max_loops,
         managed_base_branch=base_branch,
-        github_comments_url=github_comments_url,
+        issue_notes_url=issue_notes_url,
     )
     state.new_attempt()
     state.save()
@@ -85,8 +85,8 @@ def approve_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
     from agent.graph import resume_review_graph
 
     state = resume_review_graph(state, settings, {"action": "approve"})
-    if state.stage == "published" and state.github_comments_url:
-        from agent.tools.github_tools import post_issue_comment
+    if state.stage == "published" and state.issue_notes_url:
+        from agent.tools.gitlab_tools import post_issue_note
 
         summary = (
             f"BSP agent patch for run `{state.run_id}` was approved, committed, "
@@ -94,8 +94,8 @@ def approve_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
             f"Changed files: {', '.join(state.current_attempt.changed_files) or 'none'}\n\n"
             "Please build and flash."
         )
-        post_issue_comment(state.github_comments_url, settings.github_token, summary)
-    if state.github_comments_url and state.stage in {"published", "publish_failed"}:
+        post_issue_note(state.issue_notes_url, settings.gitlab_token, summary)
+    if state.issue_notes_url and state.stage in {"published", "publish_failed"}:
         run_lock.release_active(settings.runs_dir)
     return state
 
@@ -108,10 +108,43 @@ def reject_run(run_dir: str | Path, feedback: str, settings: Settings) -> BSPAge
     if state.stage == "report":
         _cleanup_managed_branch(state, settings)
         generate_report(Path(state.run_dir))
-        if state.github_comments_url:
+        if state.issue_notes_url:
             run_lock.release_active(settings.runs_dir)
         return BSPAgentState.load(run_dir)
     return state
+
+
+def list_pending_runs(settings: Settings) -> list[dict]:
+    results = []
+    runs_dir = settings.runs_dir
+    if not runs_dir.exists():
+        return results
+    for run_dir in sorted(runs_dir.glob("*/"), reverse=True):
+        state_path = run_dir / "state.json"
+        if not state_path.exists():
+            continue
+        try:
+            state = BSPAgentState.load(run_dir)
+        except Exception:
+            continue
+        if state.stage != "human_review":
+            continue
+        attempt = state.current_attempt
+        issue_no = None
+        if state.issue_notes_url:
+            match = re.search(r"/issues/(\d+)/", state.issue_notes_url)
+            issue_no = match.group(1) if match else None
+        results.append(
+            {
+                "run_id": state.run_id,
+                "run_dir": state.run_dir,
+                "issue_no": issue_no,
+                "changed_files": attempt.changed_files,
+                "code_review": attempt.code_review_decision,
+                "issue_first_line": (state.issue or "").splitlines()[0][:80],
+            }
+        )
+    return results
 
 
 def continue_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
@@ -357,6 +390,7 @@ def _propose_patch(
             LLMConfig(settings.llm_base_url, settings.llm_api_key, settings.llm_model),
             messages,
             timeout_sec=60,
+            name="patch_agent",
         )
     except LLMError as exc:
         return "NO_PATCH", f"LLM unavailable or returned an invalid response: {exc}"

@@ -5,6 +5,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from agent import observability
+
 
 @dataclass(frozen=True)
 class LLMConfig:
@@ -17,7 +19,12 @@ class LLMError(RuntimeError):
     pass
 
 
-def chat_completion(config: LLMConfig, messages: list[dict[str, str]], timeout_sec: int = 60) -> str:
+def chat_completion(
+    config: LLMConfig,
+    messages: list[dict[str, str]],
+    timeout_sec: int = 60,
+    name: str = "chat_completion",
+) -> str:
     url = config.base_url.rstrip("/") + "/chat/completions"
     body = json.dumps(
         {
@@ -35,15 +42,26 @@ def chat_completion(config: LLMConfig, messages: list[dict[str, str]], timeout_s
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise LLMError(str(exc)) from exc
-    try:
-        return str(data["choices"][0]["message"]["content"])
-    except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError(f"Unexpected LLM response: {data}") from exc
+    with observability.generation(config.model, messages, name=name) as gen:
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise LLMError(str(exc)) from exc
+        try:
+            content = str(data["choices"][0]["message"]["content"])
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMError(f"Unexpected LLM response: {data}") from exc
+        usage = data.get("usage") or {}
+        gen.update(
+            output=content,
+            usage_details={
+                "input": usage.get("prompt_tokens"),
+                "output": usage.get("completion_tokens"),
+                "total": usage.get("total_tokens"),
+            },
+        )
+        return content
 
 
 def strip_json_fence(text: str) -> str:

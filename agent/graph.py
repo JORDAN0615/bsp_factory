@@ -12,6 +12,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from agent import observability
 from agent.config import Settings
 from agent.state import BSPAgentState
 from agent.tools.artifact_tools import write_json, write_text
@@ -114,18 +115,26 @@ def build_repair_graph(checkpointer=None):
 def run_repair_graph(state: BSPAgentState, settings: Settings) -> BSPAgentState:
     logs_text = [Path(path).read_text(errors="replace", encoding="utf-8") for path in state.input_logs]
     with _sqlite_checkpointer(state) as checkpointer:
-        result = build_repair_graph(checkpointer).invoke(
-            {
-                "state": state,
-                "settings": settings,
-                "logs_text": logs_text,
-                "skill_text": "",
-                "repo_inspection": "",
-                "diff_text": "",
-                "no_patch_reason": None,
-            },
-            config=_graph_config(state),
-        )
+        config = _graph_config(state)
+        handler = observability.langchain_handler()
+        if handler is not None:
+            config = _with_observability_config(config, state, handler)
+        try:
+            with observability.run_span(state.run_id, state.issue):
+                result = build_repair_graph(checkpointer).invoke(
+                    {
+                        "state": state,
+                        "settings": settings,
+                        "logs_text": logs_text,
+                        "skill_text": "",
+                        "repo_inspection": "",
+                        "diff_text": "",
+                        "no_patch_reason": None,
+                    },
+                    config=config,
+                )
+        finally:
+            observability.flush()
     if result and "state" in result:
         return result["state"]
     return BSPAgentState.load(state.run_dir)
@@ -137,10 +146,18 @@ def resume_review_graph(
     decision: dict[str, str],
 ) -> BSPAgentState:
     with _sqlite_checkpointer(state) as checkpointer:
-        result = build_repair_graph(checkpointer).invoke(
-            Command(resume=decision, update={"settings": settings}),
-            config=_graph_config(state),
-        )
+        config = _graph_config(state)
+        handler = observability.langchain_handler()
+        if handler is not None:
+            config = _with_observability_config(config, state, handler)
+        try:
+            with observability.run_span(state.run_id, state.issue):
+                result = build_repair_graph(checkpointer).invoke(
+                    Command(resume=decision, update={"settings": settings}),
+                    config=config,
+                )
+        finally:
+            observability.flush()
     if result and "state" in result:
         return result["state"]
     return BSPAgentState.load(state.run_dir)
@@ -542,6 +559,7 @@ def _select_skills_with_llm(
             LLMConfig(settings.llm_base_url, settings.llm_api_key, settings.llm_model),
             messages,
             timeout_sec=60,
+            name="select_skills",
         )
     except LLMError as exc:
         return {
@@ -583,6 +601,18 @@ def _checkpoint_path(state: BSPAgentState) -> str:
 
 def _graph_config(state: BSPAgentState) -> dict[str, dict[str, str]]:
     return {"configurable": {"thread_id": state.run_id}}
+
+
+def _with_observability_config(config: dict, state: BSPAgentState, handler) -> dict:
+    metadata = {
+        **config.get("metadata", {}),
+        "issue": state.issue[:500],
+        "langfuse_session_id": state.run_id,
+        "langfuse_trace_name": f"run:{state.run_id}",
+        "langfuse_tags": ["bsp-agent"],
+    }
+    tags = list(dict.fromkeys([*config.get("tags", []), "bsp-agent"]))
+    return {**config, "callbacks": [handler], "metadata": metadata, "tags": tags}
 
 
 @contextmanager
