@@ -9,6 +9,35 @@ pip install -e .
 cp .env.example .env
 ```
 
+## LangGraph Studio
+
+The repo exposes the repair graph to LangGraph local server through:
+
+```text
+langgraph.json
+agent/studio_graph.py
+```
+
+Run the local server:
+
+```bash
+langgraph dev
+```
+
+Then open the Studio URL printed by the command, usually:
+
+```text
+https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
+```
+
+For LangSmith traces, set these in `.env`:
+
+```text
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=<your-key>
+LANGSMITH_PROJECT=jetson-bsp-agent
+```
+
 ## Basic Flow
 
 ```bash

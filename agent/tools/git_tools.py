@@ -92,3 +92,31 @@ def push_branch(
         args.append("-u")
     args.extend([remote, branch])
     run_git(repo_path, args)
+
+
+def pull_ff_only(repo_path: str | Path, remote: str, branch: str) -> None:
+    if not remote.strip() or any(char.isspace() for char in remote):
+        raise GitError("remote must be non-empty and whitespace-free")
+    args = ["pull", "--ff-only", remote]
+    if branch:
+        if any(char.isspace() for char in branch):
+            raise GitError("branch must be whitespace-free")
+        args.append(branch)
+    run_git(repo_path, args)
+
+
+def branch_exists(repo_path: str | Path, name: str) -> bool:
+    if not name.strip() or any(char.isspace() for char in name):
+        raise GitError("branch name must be non-empty and whitespace-free")
+    result = run_git(
+        repo_path,
+        ["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"],
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def delete_branch(repo_path: str | Path, name: str) -> None:
+    if not name.strip() or any(char.isspace() for char in name):
+        raise GitError("branch name must be non-empty and whitespace-free")
+    run_git(repo_path, ["branch", "-D", name])

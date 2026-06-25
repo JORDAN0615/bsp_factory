@@ -149,6 +149,24 @@ def report(run: Path = typer.Option(..., exists=True, file_okay=False)) -> None:
     console.print(f"[green]Report written:[/green] {path}")
 
 
+@app.command("serve")
+def serve(
+    host: str = typer.Option("0.0.0.0"),
+    port: int = typer.Option(8080),
+) -> None:
+    import uvicorn
+
+    uvicorn.run("agent.server:app", host=host, port=port)
+
+
+@app.command("unlock")
+def unlock() -> None:
+    from agent import run_lock
+
+    run_lock.release_active(get_settings().runs_dir)
+    console.print("Cleared the active-run marker.")
+
+
 def _review_prompt(run: Path) -> None:
     while True:
         choice = typer.prompt("Approve patch? [a=approve, r=reject, q=quit]").strip().lower()

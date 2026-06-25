@@ -4,6 +4,7 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+.langgraph_api/
 *.egg-info/
 agent/tools_copy/
 runs/*

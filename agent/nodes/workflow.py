@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.syntax import Syntax
 
+from agent import run_lock
 from agent.config import Settings
 from agent.state import BSPAgentState, RepairAttempt, TargetInfo, ValidationRunInfo, now_iso
 from agent.tools.artifact_tools import (
@@ -18,8 +19,13 @@ from agent.tools.artifact_tools import (
     write_text,
 )
 from agent.tools.git_tools import (
+    branch_exists,
+    checkout_branch,
+    current_branch,
+    delete_branch,
     ensure_clean_source,
     ensure_git_repo,
+    pull_ff_only,
 )
 from agent.tools.llm_tools import LLMConfig, LLMError, chat_completion, extract_diff_or_no_patch
 from agent.tools.patch_tools import PatchError, extract_diff_from_patch_md
@@ -31,11 +37,18 @@ from agent.tools.test_tools import run_validation_script
 console = Console()
 
 
-def create_run(repo: Path, issue: str, logs: list[Path], settings: Settings) -> BSPAgentState:
+def create_run(
+    repo: Path,
+    issue: str,
+    logs: list[Path],
+    settings: Settings,
+    github_comments_url: str | None = None,
+) -> BSPAgentState:
     ensure_git_repo(repo)
     ensure_clean_source(repo)
 
     run_id = make_run_id(issue)
+    base_branch = _prepare_managed_branch(repo, run_id, settings)
     run_dir = settings.runs_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     copied_logs = [copy_input_log(log, run_dir) for log in logs]
@@ -48,12 +61,15 @@ def create_run(repo: Path, issue: str, logs: list[Path], settings: Settings) -> 
         issue=issue,
         input_logs=copied_logs,
         max_loops=settings.max_loops,
+        managed_base_branch=base_branch,
+        github_comments_url=github_comments_url,
     )
     state.new_attempt()
     state.save()
     _run_repair_pipeline(state, settings)
     state = BSPAgentState.load(run_dir)
     if state.stage == "report":
+        _cleanup_managed_branch(state, settings)
         generate_report(run_dir)
         return BSPAgentState.load(run_dir)
     return state
@@ -68,7 +84,20 @@ def approve_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
         )
     from agent.graph import resume_review_graph
 
-    return resume_review_graph(state, settings, {"action": "approve"})
+    state = resume_review_graph(state, settings, {"action": "approve"})
+    if state.stage == "published" and state.github_comments_url:
+        from agent.tools.github_tools import post_issue_comment
+
+        summary = (
+            f"BSP agent patch for run `{state.run_id}` was approved, committed, "
+            f"and pushed to `{state.current_attempt.published_branch}`.\n\n"
+            f"Changed files: {', '.join(state.current_attempt.changed_files) or 'none'}\n\n"
+            "Please build and flash."
+        )
+        post_issue_comment(state.github_comments_url, settings.github_token, summary)
+    if state.github_comments_url and state.stage in {"published", "publish_failed"}:
+        run_lock.release_active(settings.runs_dir)
+    return state
 
 
 def reject_run(run_dir: str | Path, feedback: str, settings: Settings) -> BSPAgentState:
@@ -77,7 +106,10 @@ def reject_run(run_dir: str | Path, feedback: str, settings: Settings) -> BSPAge
 
     state = resume_review_graph(state, settings, {"action": "reject", "feedback": feedback})
     if state.stage == "report":
+        _cleanup_managed_branch(state, settings)
         generate_report(Path(state.run_dir))
+        if state.github_comments_url:
+            run_lock.release_active(settings.runs_dir)
         return BSPAgentState.load(run_dir)
     return state
 
@@ -247,6 +279,35 @@ def _run_repair_pipeline(state: BSPAgentState, settings: Settings) -> None:
     from agent.graph import run_repair_graph
 
     run_repair_graph(state, settings)
+
+
+def _prepare_managed_branch(repo: Path, run_id: str, settings: Settings) -> str | None:
+    if not settings.auto_push_enabled:
+        return None
+    original_branch = current_branch(repo)
+    base_branch = settings.bsp_base_branch or original_branch
+    if settings.bsp_base_branch:
+        checkout_branch(repo, settings.bsp_base_branch, create=False)
+    pull_ff_only(repo, settings.git_remote, settings.bsp_base_branch)
+    checkout_branch(repo, f"bsp-agent/{run_id}", create=True)
+    return base_branch
+
+
+def _cleanup_managed_branch(state: BSPAgentState, settings: Settings) -> None:
+    if not settings.auto_push_enabled:
+        return
+    if any(attempt.publish_status == "pushed" for attempt in state.attempts):
+        return
+    branch = f"bsp-agent/{state.run_id}"
+    base_branch = state.managed_base_branch or settings.bsp_base_branch
+    if not base_branch:
+        return
+    try:
+        if branch_exists(state.repo_path, branch):
+            checkout_branch(state.repo_path, base_branch, create=False)
+            delete_branch(state.repo_path, branch)
+    except Exception:  # noqa: BLE001
+        console.print(f"[yellow]Warning: failed to clean up managed branch {branch}.[/yellow]")
 
 
 def _propose_patch(

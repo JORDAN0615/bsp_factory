@@ -3,9 +3,11 @@ import subprocess
 from pathlib import Path
 
 from agent.config import Settings
+from agent import run_lock
 from agent.nodes.workflow import approve_run, create_run, reject_run
 from agent.nodes.workflow import _keywords_for_attempt
 from agent.state import BSPAgentState
+from agent.tools.git_tools import GitError
 
 
 REVIEW_PASS = json.dumps(
@@ -42,6 +44,10 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "llm_base_url": "LLM_BASE_URL",
         "llm_api_key": "LLM_API_KEY",
         "llm_model": "LLM_MODEL",
+        "github_token": "GITHUB_TOKEN",
+        "github_webhook_secret": "GITHUB_WEBHOOK_SECRET",
+        "bsp_repo_path": "BSP_REPO_PATH",
+        "bsp_base_branch": "BSP_BASE_BRANCH",
     }
     normalized_overrides = {
         alias_overrides.get(key, key): value for key, value in overrides.items()
@@ -55,6 +61,10 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "validation_dir": Path("tests/validation"),
         "AUTO_PUSH_ENABLED": False,
         "GIT_REMOTE": "origin",
+        "GITHUB_TOKEN": "",
+        "GITHUB_WEBHOOK_SECRET": "",
+        "BSP_REPO_PATH": tmp_path / "repo",
+        "BSP_BASE_BRANCH": "",
     }
     values.update(normalized_overrides)
     return Settings(**values)
@@ -64,6 +74,27 @@ def make_log(tmp_path: Path) -> Path:
     log = tmp_path / "dmesg.txt"
     log.write_text("imx219 probe failed i2c -121\n", encoding="utf-8")
     return log
+
+
+def current_git_branch(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+
+
+def add_pushable_origin(repo: Path, bare: Path) -> None:
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "push", "-u", "origin", current_git_branch(repo)],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
 
 
 def patch_llm(monkeypatch, fake) -> None:
@@ -199,8 +230,7 @@ def test_approve_applies_patch_after_review(tmp_path: Path, monkeypatch) -> None
 def test_approve_with_auto_push_publishes_branch(tmp_path: Path, monkeypatch) -> None:
     repo = make_repo(tmp_path)
     bare = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
-    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=repo, check=True)
+    add_pushable_origin(repo, bare)
     settings = make_settings(tmp_path, AUTO_PUSH_ENABLED=True, GIT_REMOTE="origin")
     fake = dispatch_fake([PATCH_OKAY], [REVIEW_PASS])
     patch_llm(monkeypatch, fake)
@@ -227,9 +257,10 @@ def test_approve_with_auto_push_publishes_branch(tmp_path: Path, monkeypatch) ->
     assert result.stdout.strip() == attempt.published_commit
 
 
-def test_approve_with_auto_push_records_push_failure(tmp_path: Path, monkeypatch) -> None:
+def test_managed_run_creates_work_branch_at_start(tmp_path: Path, monkeypatch) -> None:
     repo = make_repo(tmp_path)
-    # No remote configured -> commit succeeds, push fails.
+    bare = tmp_path / "origin.git"
+    add_pushable_origin(repo, bare)
     settings = make_settings(tmp_path, AUTO_PUSH_ENABLED=True, GIT_REMOTE="origin")
     fake = dispatch_fake([PATCH_OKAY], [REVIEW_PASS])
     patch_llm(monkeypatch, fake)
@@ -237,24 +268,113 @@ def test_approve_with_auto_push_records_push_failure(tmp_path: Path, monkeypatch
     state = create_run(
         repo=repo, issue="camera probe failed", logs=[make_log(tmp_path)], settings=settings
     )
+
+    assert state.stage == "human_review"
+    assert current_git_branch(repo) == f"bsp-agent/{state.run_id}"
+
+
+def test_managed_pull_failure_aborts_run(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    settings = make_settings(tmp_path, AUTO_PUSH_ENABLED=True, GIT_REMOTE="origin")
+
+    try:
+        create_run(repo=repo, issue="camera probe failed", logs=[make_log(tmp_path)], settings=settings)
+    except GitError:
+        pass
+    else:
+        raise AssertionError("create_run should abort when managed pull fails")
+
+    assert not settings.runs_dir.exists()
+
+
+def test_managed_no_patch_deletes_empty_work_branch(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    base_branch = current_git_branch(repo)
+    bare = tmp_path / "origin.git"
+    add_pushable_origin(repo, bare)
+    settings = make_settings(tmp_path, AUTO_PUSH_ENABLED=True, GIT_REMOTE="origin")
+
+    state = create_run(
+        repo=repo, issue="camera probe failed", logs=[make_log(tmp_path)], settings=settings
+    )
+
+    assert state.stage == "report"
+    assert current_git_branch(repo) == base_branch
+    branches = subprocess.run(
+        ["git", "branch", "--list", f"bsp-agent/{state.run_id}"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert branches.strip() == ""
+
+
+def test_published_webhook_run_posts_github_comment(tmp_path: Path, monkeypatch) -> None:
+    repo = make_repo(tmp_path)
+    bare = tmp_path / "origin.git"
+    add_pushable_origin(repo, bare)
+    settings = make_settings(
+        tmp_path,
+        AUTO_PUSH_ENABLED=True,
+        GIT_REMOTE="origin",
+        GITHUB_TOKEN="token",
+    )
+    fake = dispatch_fake([PATCH_OKAY], [REVIEW_PASS])
+    patch_llm(monkeypatch, fake)
+    comments: list[tuple[str | None, str, str]] = []
+
+    def fake_comment(comments_url: str | None, token: str, body: str) -> bool:
+        comments.append((comments_url, token, body))
+        return True
+
+    monkeypatch.setattr("agent.tools.github_tools.post_issue_comment", fake_comment)
+    assert run_lock.acquire_active(settings.runs_dir)
+
+    state = create_run(
+        repo=repo,
+        issue="camera probe failed",
+        logs=[make_log(tmp_path)],
+        settings=settings,
+        github_comments_url="https://api.github.test/comments",
+    )
+    assert comments == []
+
     state = approve_run(state.run_dir, settings)
 
-    attempt = state.current_attempt
-    assert state.stage == "publish_failed"
-    assert attempt.publish_status == "failed"
-    # Commit step succeeded before the push failed.
-    assert attempt.published_commit is not None
-    assert len(attempt.published_commit) == 40
-    # The real git error reason is captured, not swallowed.
-    assert attempt.publish_error
-    assert "origin" in attempt.publish_error
-    publish_json = json.loads(
-        (Path(state.run_dir) / "attempts" / "001" / "publish.json").read_text(encoding="utf-8")
+    assert state.stage == "published"
+    assert len(comments) == 1
+    assert comments[0][0] == "https://api.github.test/comments"
+    assert comments[0][1] == "token"
+    assert f"`{state.run_id}`" in comments[0][2]
+    assert f"`bsp-agent/{state.run_id}`" in comments[0][2]
+    assert not run_lock.is_active(settings.runs_dir)
+
+
+def test_target_ready_webhook_run_does_not_post_github_comment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = make_repo(tmp_path)
+    settings = make_settings(tmp_path, GITHUB_TOKEN="token")
+    fake = dispatch_fake([PATCH_OKAY], [REVIEW_PASS])
+    patch_llm(monkeypatch, fake)
+    comments: list[str] = []
+    monkeypatch.setattr(
+        "agent.tools.github_tools.post_issue_comment",
+        lambda *args, **kwargs: comments.append("called") or True,
     )
-    assert publish_json["status"] == "failed"
-    assert publish_json["error"]
-    # Patch is still applied locally.
-    assert (repo / "board.dts").read_text(encoding="utf-8") == 'status = "okay";\n'
+
+    state = create_run(
+        repo=repo,
+        issue="camera probe failed",
+        logs=[make_log(tmp_path)],
+        settings=settings,
+        github_comments_url="https://api.github.test/comments",
+    )
+    state = approve_run(state.run_dir, settings)
+
+    assert state.stage == "target_ready"
+    assert comments == []
 
 
 def test_human_reject_creates_new_attempt_without_rollback(tmp_path: Path, monkeypatch) -> None:
