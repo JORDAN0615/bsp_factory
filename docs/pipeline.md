@@ -23,10 +23,10 @@ under `runs/<run_id>/attempts/<n>/`.
 | `classify_error` (det.) | `issue`, `logs_text`, `known_error_patterns.yaml` | `bug_type`, `error_signatures`, `suspected_areas`; `debug/error_classification.json` |
 | `select_skills` (LLM) | classification, full skill **catalog metadata** | `selected_skills` (≤ `max_selected_skills`, =3); `skill_selection.json`, `selected_skills.json`. Fallback: `known_error_patterns.yaml` |
 | `load_skill` (det.) | `selected_skills`, `skills/` | `skill_text` = full `SKILL.md` of selected only; `debug/retrieved_skills.md` |
-| `inspect_repo` (det.) | `repo_path`, attempt keywords | `repo_inspection` (rg search + safe read); `repo_inspection.md` |
+| `inspect_repo` (det. **or** ReAct · ADR-0006) | `repo_path`, `issue`, `selected_skills` | `repo_inspection.md`. Mode A (default, flag OFF): deterministic rg keyword search + safe read. Mode B (`REACT_EVIDENCE_ENABLED`): bounded read-only ReAct evidence agent (LLM) loops `grep_repo`/`read_file`, writes `## Findings` + `## Investigation` trace (no diff) |
 | `patch_agent` (LLM) | `issue`, `skill_text`, `repo_inspection`, **retry context** | unified `diff_text` **or** `NO_PATCH`; `proposed_patch_prompt.md`, `proposed_patch_raw.md` |
 | `validate_patch` (det.) | `diff_text` | normalized diff + `git apply --check` (**not applied**); on ok → `patch.md`, `changed_files`, `patch_status=generated`; on fail → `no_patch_reason` |
-| `code_review_agent` (LLM) | `issue`, selected skill **names**, `repo_inspection`, `diff_text`, `code_review_policy.md`, retry context | strict JSON `{decision, confidence, findings, required_changes, human_required}`; `code_review.md`, `review_agent_raw.json`. Fail-safe → `needs_human`. **Never auto-approves — pass still routes to `human_review`** |
+| `code_review_agent` (LLM) | `issue`, selected skill **names**, `repo_inspection`, `diff_text`, `code_review_policy.md`, retry context | strict JSON `{decision, confidence, findings, required_changes}`; `code_review.md`, `review_agent_raw.json`. Fail-safe → `needs_human`. **Never auto-approves — pass still routes to `human_review`** |
 | `human_review` (human) | `patch.md`, `code_review.md`, attempt status | `approve` **or** `reject + feedback` (LangGraph `interrupt`, resumed by CLI) |
 | `apply_patch` (det.) | canonical `patch.md` diff | `git apply` to working tree; `patch_status=applied`, `stage=target_ready` |
 | `publish` (det., **NEW**) | applied tree, `git_remote`/branch | commit + push `bsp-agent/<run_id>`; `stage=published \| publish_failed`. **Opt-in, default OFF** (see ADR-0002) |

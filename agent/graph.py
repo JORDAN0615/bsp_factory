@@ -242,13 +242,25 @@ def load_skill_node(graph_state: RepairGraphState) -> RepairGraphState:
 
 def inspect_repo_node(graph_state: RepairGraphState) -> RepairGraphState:
     state = graph_state["state"]
+    settings = graph_state["settings"]
     attempt = state.current_attempt
     state.stage = "inspect_repo"
     from agent.nodes.workflow import _attempt_dir, _keywords_for_attempt, _repo_inspection_text
 
-    keywords = _keywords_for_attempt(state, attempt)
-    candidates = list_candidate_files(state.repo_path, keywords) if keywords else []
-    repo_inspection = _repo_inspection_text(state.repo_path, candidates)
+    if settings.react_evidence_enabled:
+        from agent.tools.react_evidence import gather_evidence
+
+        repo_inspection = gather_evidence(
+            state.repo_path,
+            state.issue,
+            attempt.selected_skills,
+            settings,
+            recursion_limit=settings.evidence_recursion_limit,
+        )
+    else:
+        keywords = _keywords_for_attempt(state, attempt)
+        candidates = list_candidate_files(state.repo_path, keywords) if keywords else []
+        repo_inspection = _repo_inspection_text(state.repo_path, candidates)
     write_text(_attempt_dir(state) / "repo_inspection.md", repo_inspection)
     _save_state(state)
     return {"state": state, "repo_inspection": repo_inspection}

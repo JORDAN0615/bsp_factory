@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     max_selected_skills: int = 3
     max_loops: int = 3
     code_review_enabled: bool = Field(default=True, alias="CODE_REVIEW_ENABLED")
+    react_evidence_enabled: bool = Field(default=False, alias="REACT_EVIDENCE_ENABLED")
+    evidence_recursion_limit: int = Field(default=30, alias="EVIDENCE_RECURSION_LIMIT")
     auto_push_enabled: bool = Field(default=False, alias="AUTO_PUSH_ENABLED")
     git_remote: str = Field(default="origin", alias="GIT_REMOTE")
     bsp_base_branch: str = Field(default="", alias="BSP_BASE_BRANCH")

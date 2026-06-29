@@ -14,7 +14,7 @@ classes: {
 start: START { class: term }
 end: "END\n(report.md)" { class: term }
 
-trigger: "Trigger\nissue + logs (Actor=init-run · cronjob planned)" {
+trigger: "Trigger\nissue + logs · Actor init-run (CLI) · GitLab issue webhook (ADR-0003) · cronjob planned" {
   shape: page
   style: { fill: "#fff8e1"; stroke: "#f9a825"; stroke-width: 2 }
 }
@@ -25,7 +25,14 @@ graph: "LangGraph Repair Graph" {
   classify: "classify_error\n\nin:  issue, logs, known_error_patterns.yaml\nout: bug_type, error_signatures, suspected_areas" { class: det }
   select:   "select_skills  (LLM)\n\nin:  classification, skill catalog metadata\nout: selected_skills (<=3)  ·  fallback: patterns.yaml" { class: llm }
   load:     "load_skill\n\nin:  selected_skills, skills/\nout: skill_text (full SKILL.md of selected)" { class: det }
-  inspect:  "inspect_repo\n\nin:  repo_path, keywords\nout: repo_inspection.md (rg search + safe read)" { class: det }
+  inspect: "inspect_repo  (two modes · ADR-0006)\n\nin:  repo_path, issue, selected_skills\nout: repo_inspection.md  (## Findings + ## Investigation trace)" {
+    class: det
+    modeA: "mode A · default (flag OFF)\ndeterministic rg keyword search + safe read" { class: det }
+    modeB: "mode B · REACT_EVIDENCE_ENABLED\nbounded ReAct evidence agent (LLM)\nexplores then writes plain findings (no diff)" {
+      class: llm
+      tools: "read-only tools: grep_repo · read_file\nsandboxed to repo · ~5-6 calls · never writes" { class: det }
+    }
+  }
   patch:    "patch_agent  (LLM)\n\nin:  issue, skill_text, repo_inspection, retry_context\nout: unified diff  |  NO_PATCH" { class: llm }
   d_patch:  "diff?" { class: dec }
   validate: "validate_patch\n\nin:  diff_text\nproc: normalize + git apply --check (NOT applied)\nout: patch.md, changed_files, status=generated" { class: det }
