@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -35,12 +36,14 @@ def check_patch(repo_path: str | Path, diff_text: str) -> None:
     """Validate the diff and run git apply --check without applying it."""
     diff_text = _ensure_trailing_newline(diff_text)
     validate_unified_diff(diff_text)
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C"}
     check = subprocess.run(
         ["git", "-C", str(repo_path), "apply", "--check"],
         input=diff_text,
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
     if check.returncode != 0:
         raise PatchError(check.stderr.strip() or "git apply --check failed")
@@ -49,12 +52,14 @@ def check_patch(repo_path: str | Path, diff_text: str) -> None:
 def apply_patch(repo_path: str | Path, diff_text: str) -> None:
     diff_text = _ensure_trailing_newline(diff_text)
     check_patch(repo_path, diff_text)
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C"}
     apply = subprocess.run(
         ["git", "-C", str(repo_path), "apply"],
         input=diff_text,
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
     if apply.returncode != 0:
         raise PatchError(apply.stderr.strip() or "git apply failed")
@@ -86,6 +91,8 @@ def normalize_hunk_headers(repo_path: str | Path, diff_text: str) -> str:
                 index += 1
             hunk = [" " if item == "" else item for item in hunk]
             file_path = Path(repo_path) / current_file
+            if not file_path.is_file():
+                raise PatchError(f"patch targets a file that does not exist: {current_file}")
             content = file_path.read_text(errors="replace", encoding="utf-8").splitlines()
             hunk, old_lines, new_lines, old_start, file_block = _match_hunk_with_trim(
                 file_path, content, hunk
@@ -121,12 +128,14 @@ def normalize_hunk_headers(repo_path: str | Path, diff_text: str) -> str:
 
 def reverse_patch(repo_path: str | Path, diff_text: str) -> None:
     diff_text = _ensure_trailing_newline(diff_text)
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C"}
     check = subprocess.run(
         ["git", "-C", str(repo_path), "apply", "--reverse", "--check"],
         input=diff_text,
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
     if check.returncode != 0:
         raise PatchError(check.stderr.strip() or "git apply --reverse --check failed")
@@ -136,6 +145,7 @@ def reverse_patch(repo_path: str | Path, diff_text: str) -> None:
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
     if apply.returncode != 0:
         raise PatchError(apply.stderr.strip() or "git apply --reverse failed")

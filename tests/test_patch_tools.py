@@ -94,6 +94,18 @@ def test_changed_files_from_plain_unified_diff() -> None:
     assert summarize_diff(diff) == [{"file": "board.dts", "additions": 1, "deletions": 1}]
 
 
+def test_normalize_hunk_headers_rejects_missing_target_file(tmp_path: Path) -> None:
+    diff = """--- a/missing.dts
++++ b/missing.dts
+@@
+-old
++new
+"""
+
+    with pytest.raises(PatchError, match="patch targets a file that does not exist"):
+        normalize_hunk_headers(tmp_path, diff)
+
+
 def test_validate_rejects_hunks_without_line_numbers() -> None:
     diff = """--- a/board.dts
 +++ b/board.dts

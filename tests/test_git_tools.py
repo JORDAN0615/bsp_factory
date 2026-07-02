@@ -3,12 +3,14 @@ from pathlib import Path
 
 import pytest
 
+import agent.tools.git_tools as git_tools
 from agent.tools.git_tools import (
     GitError,
     checkout_branch,
     commit_all,
     current_branch,
     push_branch,
+    run_git as tool_run_git,
 )
 
 
@@ -88,3 +90,18 @@ def test_push_branch_refuses_protected_branches(tmp_path: Path, branch: str) -> 
 
     with pytest.raises(GitError, match=f"refusing to push protected branch {branch}"):
         push_branch(repo, "origin", branch)
+
+
+def test_run_git_forces_c_locale(tmp_path: Path, monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(cmd, text, capture_output, check, env):
+        captured["env"] = env
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_tools.subprocess, "run", fake_run)
+
+    tool_run_git(tmp_path, ["status"])
+
+    assert captured["env"]["LC_ALL"] == "C"
+    assert captured["env"]["LANG"] == "C"

@@ -98,6 +98,7 @@ class BSPAgentState(BaseModel):
     input_logs: list[str] = Field(default_factory=list)
     attempts: list[RepairAttempt] = Field(default_factory=list)
     max_loops: int = 3
+    human_directed: bool = False
     managed_base_branch: str | None = None
     issue_notes_url: str | None = None
     report_path: str | None = None

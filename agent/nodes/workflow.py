@@ -26,8 +26,9 @@ from agent.tools.git_tools import (
     ensure_clean_source,
     ensure_git_repo,
     pull_ff_only,
+    run_git,
 )
-from agent.tools.llm_tools import LLMConfig, LLMError, chat_completion, extract_diff_or_no_patch
+from agent.tools.llm_tools import LLMConfig, LLMError, chat_completion
 from agent.tools.patch_tools import PatchError, extract_diff_from_patch_md
 from agent.tools.repo_tools import read_text_file
 from agent.tools.retry_tools import build_retry_context
@@ -85,18 +86,37 @@ def approve_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
     from agent.graph import resume_review_graph
 
     state = resume_review_graph(state, settings, {"action": "approve"})
-    if state.stage == "published" and state.issue_notes_url:
-        from agent.tools.gitlab_tools import post_issue_note
-
-        summary = (
-            f"BSP agent patch for run `{state.run_id}` was approved, committed, "
-            f"and pushed to `{state.current_attempt.published_branch}`.\n\n"
-            f"Changed files: {', '.join(state.current_attempt.changed_files) or 'none'}\n\n"
-            "Please build and flash."
-        )
-        post_issue_note(state.issue_notes_url, settings.gitlab_token, summary)
+    if state.stage == "published":
+        _post_publish_note(state, settings)
     if state.issue_notes_url and state.stage in {"published", "publish_failed"}:
         run_lock.release_active(settings.runs_dir)
+    return state
+
+
+def publish_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
+    state = BSPAgentState.load(run_dir)
+    if state.stage != "publish_failed":
+        raise RuntimeError(f"Run is not waiting for publish retry: {state.stage}")
+    from agent.graph import _do_publish
+
+    state = _do_publish(state, settings)
+    if state.stage == "published":
+        _post_publish_note(state, settings)
+        run_lock.release_active(settings.runs_dir)
+    return state
+
+
+def abandon_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
+    state = BSPAgentState.load(run_dir)
+    if state.stage != "publish_failed":
+        raise RuntimeError(f"Run is not waiting for abandon: {state.stage}")
+    run_git(state.repo_path, ["reset", "--hard"])
+    run_git(state.repo_path, ["clean", "-fd"])
+    _cleanup_managed_branch(state, settings)
+    state.stage = "report"
+    state.touch()
+    state.save()
+    run_lock.release_active(settings.runs_dir)
     return state
 
 
@@ -112,6 +132,20 @@ def reject_run(run_dir: str | Path, feedback: str, settings: Settings) -> BSPAge
             run_lock.release_active(settings.runs_dir)
         return BSPAgentState.load(run_dir)
     return state
+
+
+def _post_publish_note(state: BSPAgentState, settings: Settings) -> None:
+    if not state.issue_notes_url:
+        return
+    from agent.tools.gitlab_tools import post_issue_note
+
+    summary = (
+        f"BSP agent patch for run `{state.run_id}` was approved, committed, "
+        f"and pushed to `{state.current_attempt.published_branch}`.\n\n"
+        f"Changed files: {', '.join(state.current_attempt.changed_files) or 'none'}\n\n"
+        "Please build and flash."
+    )
+    post_issue_note(state.issue_notes_url, settings.gitlab_token, summary)
 
 
 def list_pending_runs(settings: Settings) -> list[dict]:
@@ -351,10 +385,9 @@ def _propose_patch(
     settings: Settings,
 ) -> tuple[str, str | None]:
     system_prompt = (
-        "You are a conservative Jetson BSP patch generator. Output unified diff only. "
-        "Modify existing candidate files only. Hunk headers must be standard git-apply-compatible "
-        "unified diff headers with line numbers, for example @@ -1,4 +1,4 @@. "
-        "If uncertain, output NO_PATCH followed by a short reason."
+        "You are a conservative Jetson BSP patch generator. Output search/replace "
+        "edit blocks only, or NO_PATCH followed by a short reason. Do not output "
+        "unified diffs."
     )
     user_prompt = (
         f"Issue:\n{state.issue}\n\n"
@@ -364,13 +397,24 @@ def _propose_patch(
         f"Retry context (previous attempts in this run):\n{build_retry_context(state)[:8000]}\n\n"
         f"Previous review feedback:\n{_review_feedback_context(state)}\n\n"
         f"Retrieved skills:\n{skill_text[:20000]}\n\n"
-        f"Repo inspection:\n{repo_inspection[:20000]}\n"
+        f"Repo inspection:\n{repo_inspection[:40000]}\n"
+        "\nEdit block format:\n"
+        "FILE: <repo-relative path>\n"
+        "REPLACE_ALL: <true|false>  # optional, default false\n"
+        "<<<<<<< SEARCH\n"
+        "<exact current text>\n"
+        "=======\n"
+        "<replacement text>\n"
+        ">>>>>>> REPLACE\n"
         "\nRules:\n"
-        "- Output only a git-apply-compatible unified diff or NO_PATCH.\n"
-        "- Include exact hunk line numbers.\n"
+        "- Output only edit blocks in the exact format above or NO_PATCH <reason>.\n"
+        "- Include enough surrounding context in SEARCH for a unique exact match.\n"
+        "- Use one block per distinct change.\n"
+        "- For the same change across several near-identical blocks, use REPLACE_ALL: true.\n"
         "- Preserve whitespace and indentation exactly from the inspected source excerpts.\n"
-        "- Prefer minimal single-line or small hunks instead of replacing a whole DTS node.\n"
+        "- Prefer minimal single-line or small replacements instead of replacing a whole DTS node.\n"
         "- Do not add explanatory comments to source files unless the existing file style requires it.\n"
+        "- Do not invent files; FILE must point to an existing repo-relative path.\n"
         "- Do not invent clocks, regulators, GPIOs, or board facts not present in the inspected source.\n"
         "- Do not repeat a patch that was rejected by human review.\n"
         "- Use human feedback as higher-priority evidence than your previous patch.\n"
@@ -395,7 +439,10 @@ def _propose_patch(
     except LLMError as exc:
         return "NO_PATCH", f"LLM unavailable or returned an invalid response: {exc}"
     write_text(_attempt_dir(state) / "proposed_patch_raw.md", response)
-    return extract_diff_or_no_patch(response)
+    if response.strip() == "NO_PATCH" or response.lstrip().startswith("NO_PATCH"):
+        reason = response.strip()[len("NO_PATCH") :].strip(" :-\n") or "No safe patch was proposed."
+        return "NO_PATCH", reason
+    return response, None
 
 
 def _proposed_patch_prompt_markdown(attempt: RepairAttempt, system_prompt: str, user_prompt: str) -> str:

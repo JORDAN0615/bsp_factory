@@ -4,9 +4,17 @@ from pathlib import Path
 
 from agent.config import Settings
 from agent import run_lock
-from agent.nodes.workflow import approve_run, create_run, list_pending_runs, reject_run
+from agent.graph import apply_patch_node, human_review_node, validate_patch_node, write_no_patch_node
+from agent.nodes.workflow import (
+    abandon_run,
+    approve_run,
+    create_run,
+    list_pending_runs,
+    publish_run,
+    reject_run,
+)
 from agent.nodes.workflow import _keywords_for_attempt
-from agent.state import BSPAgentState
+from agent.state import BSPAgentState, RepairAttempt
 from agent.tools.git_tools import GitError
 
 
@@ -132,18 +140,20 @@ def dispatch_fake(patch_responses, review_responses):
     return fake
 
 
-PATCH_OKAY = """--- a/board.dts
-+++ b/board.dts
-@@ -1 +1 @@
--status = "disabled";
-+status = "okay";
+PATCH_OKAY = """FILE: board.dts
+<<<<<<< SEARCH
+status = "disabled";
+=======
+status = "okay";
+>>>>>>> REPLACE
 """
 
-PATCH_OKAY_SPECIFIC = """--- a/board.dts
-+++ b/board.dts
-@@ -1 +1 @@
--status = "disabled";
-+status = "okay-specific";
+PATCH_OKAY_SPECIFIC = """FILE: board.dts
+<<<<<<< SEARCH
+status = "disabled";
+=======
+status = "okay-specific";
+>>>>>>> REPLACE
 """
 
 
@@ -286,6 +296,103 @@ def test_approve_with_auto_push_publishes_branch(tmp_path: Path, monkeypatch) ->
         check=True,
     )
     assert result.stdout.strip() == attempt.published_commit
+
+
+def test_publish_run_retry_posts_note_and_releases_lock(tmp_path: Path, monkeypatch) -> None:
+    settings = make_settings(tmp_path, GITLAB_TOKEN="token")
+    run_dir = tmp_path / "runs" / "run123"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(run_dir),
+        stage="publish_failed",
+        issue="camera failed",
+        issue_notes_url="https://gitlab.example/api/v4/projects/42/issues/7/notes",
+        attempts=[
+            RepairAttempt(
+                attempt_no=1,
+                patch_status="applied",
+                changed_files=["board.dts"],
+                publish_status="failed",
+                publish_error="push failed",
+            )
+        ],
+    )
+    state.save()
+    assert run_lock.acquire_active(settings.runs_dir)
+    posted = {}
+
+    def fake_do_publish(loaded, publish_settings):
+        loaded.stage = "published"
+        loaded.current_attempt.publish_status = "pushed"
+        loaded.current_attempt.published_branch = "bsp-agent/run123"
+        loaded.current_attempt.publish_error = None
+        loaded.save()
+        return loaded
+
+    def fake_post_issue_note(notes_url, token, body):
+        posted["notes_url"] = notes_url
+        posted["token"] = token
+        posted["body"] = body
+        return True
+
+    monkeypatch.setattr("agent.graph._do_publish", fake_do_publish)
+    monkeypatch.setattr("agent.tools.gitlab_tools.post_issue_note", fake_post_issue_note)
+
+    result = publish_run(run_dir, settings)
+
+    assert result.stage == "published"
+    assert not run_lock.is_active(settings.runs_dir)
+    assert posted["notes_url"] == state.issue_notes_url
+    assert posted["token"] == "token"
+    assert "bsp-agent/run123" in posted["body"]
+
+
+def test_publish_run_requires_publish_failed_stage(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    run_dir = tmp_path / "runs" / "run123"
+    BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(run_dir),
+        stage="human_review",
+        issue="camera failed",
+    ).save()
+
+    try:
+        publish_run(run_dir, settings)
+    except RuntimeError as exc:
+        assert "not waiting for publish retry" in str(exc)
+    else:
+        raise AssertionError("publish_run should reject non-publish_failed stage")
+
+
+def test_abandon_run_sets_report_and_releases_lock(tmp_path: Path, monkeypatch) -> None:
+    settings = make_settings(tmp_path)
+    run_dir = tmp_path / "runs" / "run123"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(run_dir),
+        stage="publish_failed",
+        issue="camera failed",
+        attempts=[RepairAttempt(attempt_no=1, patch_status="applied")],
+    )
+    state.save()
+    assert run_lock.acquire_active(settings.runs_dir)
+    commands = []
+
+    def fake_run_git(repo_path, args):
+        commands.append(args)
+
+    monkeypatch.setattr("agent.nodes.workflow.run_git", fake_run_git)
+    monkeypatch.setattr("agent.nodes.workflow._cleanup_managed_branch", lambda state, settings: None)
+
+    result = abandon_run(run_dir, settings)
+
+    assert result.stage == "report"
+    assert commands == [["reset", "--hard"], ["clean", "-fd"]]
+    assert not run_lock.is_active(settings.runs_dir)
 
 
 def test_managed_run_creates_work_branch_at_start(tmp_path: Path, monkeypatch) -> None:
@@ -439,6 +546,145 @@ def test_human_reject_creates_new_attempt_without_rollback(tmp_path: Path, monke
 
     assert state.stage == "target_ready"
     assert (repo / "board.dts").read_text(encoding="utf-8") == 'status = "okay-specific";\n'
+
+
+def test_human_reject_at_budget_creates_new_attempt(tmp_path: Path, monkeypatch) -> None:
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="human_review",
+        issue="camera failed",
+        max_loops=1,
+    )
+    attempt = state.new_attempt()
+    attempt.patch_status = "generated"
+    state.save()
+    monkeypatch.setattr(
+        "agent.graph.interrupt",
+        lambda payload: {"action": "reject", "feedback": "use the board-specific DTS"},
+    )
+
+    result = human_review_node({"state": state})
+
+    assert result["review_route"] == "classify_error"
+    assert state.human_directed is True
+    assert state.stage == "classify_error"
+    assert len(state.attempts) == 2
+    assert state.attempts[0].human_review_status == "rejected"
+    assert state.attempts[0].human_feedback == "use the board-specific DTS"
+
+
+def test_write_no_patch_human_directed_budget_routes_human_review(tmp_path: Path) -> None:
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="propose_patch",
+        issue="camera failed",
+        max_loops=1,
+        human_directed=True,
+    )
+    state.new_attempt()
+    state.save()
+
+    result = write_no_patch_node({"state": state, "no_patch_reason": "no safe patch"})
+
+    assert result["no_patch_route"] == "human_review"
+    assert state.stage == "human_review"
+    assert state.current_attempt.patch_status == "no_patch"
+
+
+def test_write_no_patch_pre_human_budget_still_ends_report(tmp_path: Path) -> None:
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="propose_patch",
+        issue="camera failed",
+        max_loops=1,
+    )
+    state.new_attempt()
+    state.save()
+
+    result = write_no_patch_node({"state": state, "no_patch_reason": "no safe patch"})
+
+    assert result["no_patch_route"] == "end"
+    assert state.stage == "report"
+    assert state.current_attempt.patch_status == "no_patch"
+
+
+def test_validate_patch_edit_error_routes_write_no_patch(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="validate_patch",
+        issue="camera failed",
+    )
+    state.new_attempt()
+    state.save()
+    edit_text = """FILE: board.dts
+<<<<<<< SEARCH
+missing
+=======
+new
+>>>>>>> REPLACE
+"""
+
+    result = validate_patch_node({"state": state, "diff_text": edit_text})
+
+    assert result["validate_route"] == "write_no_patch"
+    assert "SEARCH not found" in result["no_patch_reason"]
+    assert state.current_attempt.patch_status == "failed"
+
+
+def test_validate_patch_persists_edits_and_preview_diff(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="validate_patch",
+        issue="camera failed",
+    )
+    state.new_attempt()
+    state.save()
+
+    result = validate_patch_node({"state": state, "diff_text": PATCH_OKAY})
+
+    assert result["validate_route"] == "code_review_agent"
+    attempt_dir = Path(state.run_dir) / "attempts" / "001"
+    assert (attempt_dir / "edits.md").read_text(encoding="utf-8") == PATCH_OKAY
+    patch_md = (attempt_dir / "patch.md").read_text(encoding="utf-8")
+    assert "--- a/board.dts" in patch_md
+    assert '+status = "okay";' in patch_md
+    assert state.current_attempt.changed_files == ["board.dts"]
+    assert state.current_attempt.patch_status == "generated"
+
+
+def test_apply_patch_node_applies_edits_md(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="apply_patch",
+        issue="camera failed",
+    )
+    attempt = state.new_attempt()
+    attempt.patch_status = "generated"
+    state.save()
+    attempt_dir = Path(state.run_dir) / "attempts" / "001"
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    (attempt_dir / "edits.md").write_text(PATCH_OKAY, encoding="utf-8")
+
+    result = apply_patch_node({"state": state})
+
+    assert result["state"].stage == "target_ready"
+    assert state.current_attempt.patch_status == "applied"
+    assert (repo / "board.dts").read_text(encoding="utf-8") == 'status = "okay";\n'
 
 
 def test_code_review_reject_auto_retries(tmp_path: Path, monkeypatch) -> None:

@@ -17,13 +17,13 @@ dmesg symptom -> device-tree node -> compatible string -> driver -> Kconfig.
 
 Stop conditions -- obey these strictly:
 - Budget about 5-6 tool calls total. Spend them; do not keep searching after that.
-- Once you have found and read the device-tree node (or file) named in the issue,
+- Once you have found and read the device-tree node or file named in the issue,
   that is usually enough -- stop and write your findings.
 - If a grep returns "(no matches)", do NOT retry variants of the same query. Treat
   it as "not present" and move on.
-- Do not hunt for the include board files, driver, or Kconfig if they do not
-  turn up in the first search or two. List anything you could not find under a
-  "Missing:" note in your findings instead of searching further.
+- Do not hunt for the include chain, board files, driver, or Kconfig if they do
+  not turn up in the first search or two. List anything you could not find under
+  a "Missing:" note in your findings instead of searching further.
 
 When you stop, write a concise plain-text findings summary that cites the exact
 files and lines you read. Never guess. Do not produce a diff.
@@ -31,6 +31,7 @@ files and lines you read. Never guess. Do not produce a diff.
 
 _MAX_TOOL_BULLETS = 40
 _MAX_PREVIEW_CHARS = 200
+_MAX_SOURCE_EXCERPT_CHARS = 40000
 
 
 def gather_evidence(
@@ -49,6 +50,8 @@ def gather_evidence(
         api_key=settings.llm_api_key,
         model=settings.llm_model,
         temperature=0,
+        timeout=60,
+        max_retries=2,
     )
     agent = create_agent(
         model=model,
@@ -66,32 +69,50 @@ def gather_evidence(
         f"Selected skills:\n{', '.join(selected_skills) or '(none)'}\n\n"
         "Use tools as needed, then write concise findings. Do not propose a diff."
     )
+    messages: list[Any] = []
+    converged = True
     try:
         with readonly_repo(repo_path):
-            result = agent.invoke(
+            for chunk in agent.stream(
                 {"messages": [{"role": "user", "content": prompt}]},
                 config=config,
-            )
+                stream_mode="values",
+            ):
+                if isinstance(chunk, dict) and chunk.get("messages"):
+                    messages = chunk["messages"]
     except GraphRecursionError:
-        return render_evidence_md(
-            messages=[],
-            findings=f"(investigation did not converge within {limit} rounds)",
-        )
-    messages = result.get("messages", []) if isinstance(result, dict) else []
-    return render_evidence_md(messages=messages)
+        converged = False
+    findings = (
+        None
+        if converged
+        else f"(did not fully converge within {limit} rounds; partial evidence below)"
+    )
+    return render_evidence_md(messages=messages, findings=findings)
 
 
 def render_evidence_md(messages: list[Any], findings: str | None = None) -> str:
     final_text = findings if findings is not None else _final_ai_text(messages)
     bullets = _investigation_bullets(messages)
+    excerpts = _source_excerpt_lines(messages)
     lines = [
         "## Findings",
         "",
         final_text or "(no findings produced)",
         "",
-        f"## Investigation ({len(bullets)} rounds)",
+        "## Source excerpts",
         "",
     ]
+    if excerpts:
+        lines.extend(excerpts)
+    else:
+        lines.append("- (no source excerpts recorded)")
+    lines.extend(
+        [
+            "",
+            f"## Investigation ({len(bullets)} rounds)",
+            "",
+        ]
+    )
     if bullets:
         lines.extend(bullets)
     else:
@@ -127,6 +148,53 @@ def _investigation_bullets(messages: list[Any]) -> list[str]:
     for call in pending[: max(0, _MAX_TOOL_BULLETS - len(bullets))]:
         bullets.append(f"- {call} -> (no tool result recorded)")
     return bullets
+
+
+def _source_excerpt_lines(messages: list[Any]) -> list[str]:
+    lines: list[str] = []
+    pending: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    total_chars = 0
+    for message in messages:
+        pending.extend(_tool_calls(message))
+        if _message_type(message) != "tool":
+            continue
+        call = pending.pop(0) if pending else {"name": _tool_name(message), "args": {}}
+        name = str(call.get("name") or _tool_name(message))
+        if name not in {"read_file", "grep_repo"}:
+            continue
+        content = _message_content(message)
+        header = _source_excerpt_header(name, call)
+        key = (header, content)
+        if key in seen:
+            continue
+        seen.add(key)
+        block_lines = [header, "```", content, "```", ""]
+        block = "\n".join(block_lines)
+        if total_chars + len(block) > _MAX_SOURCE_EXCERPT_CHARS:
+            lines.append("... source excerpts truncated")
+            return lines
+        lines.extend(block_lines)
+        total_chars += len(block)
+    return lines
+
+
+def _source_excerpt_header(name: str, call: dict[str, Any]) -> str:
+    args = call.get("args") or {}
+    if not isinstance(args, dict):
+        return f"### {name}"
+    if name == "read_file":
+        path = args.get("path") or "(unknown)"
+        start = args.get("start")
+        end = args.get("end")
+        if start is not None or end is not None:
+            start_text = "?" if start is None else str(start)
+            end_text = "?" if end is None else str(end)
+            return f"### read_file {path} (lines {start_text}-{end_text})"
+        return f"### read_file {path}"
+    if name == "grep_repo":
+        return f"### grep_repo {args.get('pattern') or '(unknown)'}"
+    return f"### {name}"
 
 
 def _tool_calls(message: Any) -> list[dict[str, Any]]:

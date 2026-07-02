@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -10,7 +11,8 @@ class GitError(RuntimeError):
 
 def run_git(repo_path: str | Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     cmd = ["git", "-C", str(repo_path), *args]
-    result = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C"}
+    result = subprocess.run(cmd, text=True, capture_output=True, check=False, env=env)
     if check and result.returncode != 0:
         raise GitError(result.stderr.strip() or result.stdout.strip() or f"git failed: {' '.join(cmd)}")
     return result

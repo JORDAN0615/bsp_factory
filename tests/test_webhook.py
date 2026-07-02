@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from agent import run_lock
 from agent.config import Settings
+from agent.state import BSPAgentState
 from agent.tools.gitlab_tools import post_issue_note
 from agent.webhook import build_issue_text, build_notes_url, extract_log_block, verify_token
 
@@ -202,3 +203,51 @@ def test_webhook_rejected_while_active(tmp_path: Path, monkeypatch) -> None:
 
     assert response.status_code == 409
     assert scheduled == []
+
+
+def test_run_issue_releases_active_marker_for_non_human_review_stage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import agent.server as server
+
+    monkeypatch.setattr(server, "settings", make_settings(tmp_path, "secret"))
+    assert run_lock.acquire_active(server.settings.runs_dir)
+
+    def fake_create_run(**kwargs):
+        return BSPAgentState(
+            run_id="run123",
+            repo_path=str(tmp_path / "repo"),
+            run_dir=str(tmp_path / "runs" / "run123"),
+            stage="report",
+            issue="camera failed",
+        )
+
+    monkeypatch.setattr(server, "create_run", fake_create_run)
+
+    server.run_issue("camera failed", None, None)
+
+    assert not run_lock.is_active(server.settings.runs_dir)
+
+
+def test_run_issue_holds_active_marker_for_human_review_stage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import agent.server as server
+
+    monkeypatch.setattr(server, "settings", make_settings(tmp_path, "secret"))
+    assert run_lock.acquire_active(server.settings.runs_dir)
+
+    def fake_create_run(**kwargs):
+        return BSPAgentState(
+            run_id="run123",
+            repo_path=str(tmp_path / "repo"),
+            run_dir=str(tmp_path / "runs" / "run123"),
+            stage="human_review",
+            issue="camera failed",
+        )
+
+    monkeypatch.setattr(server, "create_run", fake_create_run)
+
+    server.run_issue("camera failed", None, None)
+
+    assert run_lock.is_active(server.settings.runs_dir)
