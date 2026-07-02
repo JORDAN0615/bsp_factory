@@ -4,7 +4,13 @@ from pathlib import Path
 
 from agent.config import Settings
 from agent import run_lock
-from agent.graph import apply_patch_node, human_review_node, validate_patch_node, write_no_patch_node
+from agent.graph import (
+    apply_patch_node,
+    human_review_node,
+    patch_agent_node,
+    validate_patch_node,
+    write_no_patch_node,
+)
 from agent.nodes.workflow import (
     abandon_run,
     approve_run,
@@ -50,6 +56,7 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "git_remote": "GIT_REMOTE",
         "code_review_enabled": "CODE_REVIEW_ENABLED",
         "react_evidence_enabled": "REACT_EVIDENCE_ENABLED",
+        "patch_agent_agentic": "PATCH_AGENT_AGENTIC",
         "llm_base_url": "LLM_BASE_URL",
         "llm_api_key": "LLM_API_KEY",
         "llm_model": "LLM_MODEL",
@@ -70,6 +77,7 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "validation_dir": Path("tests/validation"),
         "AUTO_PUSH_ENABLED": False,
         "REACT_EVIDENCE_ENABLED": False,
+        "PATCH_AGENT_AGENTIC": False,
         "GIT_REMOTE": "origin",
         "GITLAB_TOKEN": "",
         "GITLAB_WEBHOOK_TOKEN": "",
@@ -664,6 +672,35 @@ def test_validate_patch_persists_edits_and_preview_diff(tmp_path: Path) -> None:
     assert state.current_attempt.patch_status == "generated"
 
 
+def test_validate_patch_accepts_agentic_diff_path(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="validate_patch",
+        issue="camera failed",
+    )
+    state.new_attempt()
+    state.save()
+    diff_text = """--- a/board.dts
++++ b/board.dts
+@@ -1 +1 @@
+-status = "disabled";
++status = "okay";
+"""
+
+    result = validate_patch_node({"state": state, "diff_text": diff_text, "patch_format": "diff"})
+
+    assert result["validate_route"] == "code_review_agent"
+    attempt_dir = Path(state.run_dir) / "attempts" / "001"
+    assert not (attempt_dir / "edits.md").exists()
+    assert (attempt_dir / "agentic_patch.diff").read_text(encoding="utf-8") == diff_text
+    patch_md = (attempt_dir / "patch.md").read_text(encoding="utf-8")
+    assert "--- a/board.dts" in patch_md
+    assert state.current_attempt.changed_files == ["board.dts"]
+
+
 def test_apply_patch_node_applies_edits_md(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     state = BSPAgentState(
@@ -685,6 +722,100 @@ def test_apply_patch_node_applies_edits_md(tmp_path: Path) -> None:
     assert result["state"].stage == "target_ready"
     assert state.current_attempt.patch_status == "applied"
     assert (repo / "board.dts").read_text(encoding="utf-8") == 'status = "okay";\n'
+
+
+def test_apply_patch_node_applies_agentic_patch_md_when_no_edits_md(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="apply_patch",
+        issue="camera failed",
+    )
+    attempt = state.new_attempt()
+    attempt.patch_status = "generated"
+    state.save()
+    attempt_dir = Path(state.run_dir) / "attempts" / "001"
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    diff_text = """--- a/board.dts
++++ b/board.dts
+@@ -1 +1 @@
+-status = "disabled";
++status = "okay";
+"""
+    (attempt_dir / "patch.md").write_text(
+        "# Patch\n\nAttempt: `001`\n\n## Changed Files\n\n- `board.dts`\n\n## Diff\n\n"
+        f"```diff\n{diff_text}```\n",
+        encoding="utf-8",
+    )
+
+    result = apply_patch_node({"state": state})
+
+    assert result["state"].stage == "target_ready"
+    assert state.current_attempt.patch_status == "applied"
+    assert (repo / "board.dts").read_text(encoding="utf-8") == 'status = "okay";\n'
+
+
+def test_patch_agent_node_agentic_generates_diff_and_cleans_staging(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = make_repo(tmp_path)
+    settings = make_settings(tmp_path, PATCH_AGENT_AGENTIC=True)
+    staging = tmp_path / "agentic-staging"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="propose_patch",
+        issue="camera failed",
+    )
+    state.new_attempt()
+    state.save()
+
+    def fake_run_patch_agent(staging_path, *args, **kwargs):
+        path = Path(staging_path) / "board.dts"
+        path.write_text('status = "okay";\n', encoding="utf-8")
+
+    monkeypatch.setattr("agent.graph.tempfile.mkdtemp", lambda prefix: str(staging))
+    monkeypatch.setattr("agent.tools.patch_agent.run_patch_agent", fake_run_patch_agent)
+
+    result = patch_agent_node(
+        {"state": state, "settings": settings, "skill_text": "", "repo_inspection": ""}
+    )
+
+    assert result["patch_format"] == "diff"
+    assert result["no_patch_reason"] is None
+    assert '+status = "okay";' in result["diff_text"]
+    assert not staging.exists()
+    assert (repo / "board.dts").read_text(encoding="utf-8") == 'status = "disabled";\n'
+
+
+def test_patch_agent_node_agentic_no_edits_routes_no_patch(tmp_path: Path, monkeypatch) -> None:
+    repo = make_repo(tmp_path)
+    settings = make_settings(tmp_path, PATCH_AGENT_AGENTIC=True)
+    staging = tmp_path / "agentic-staging-empty"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="propose_patch",
+        issue="camera failed",
+    )
+    state.new_attempt()
+    state.save()
+
+    monkeypatch.setattr("agent.graph.tempfile.mkdtemp", lambda prefix: str(staging))
+    monkeypatch.setattr("agent.tools.patch_agent.run_patch_agent", lambda *args, **kwargs: None)
+
+    result = patch_agent_node(
+        {"state": state, "settings": settings, "skill_text": "", "repo_inspection": ""}
+    )
+
+    assert result["diff_text"] == "NO_PATCH"
+    assert result["no_patch_reason"] == "Agentic patch agent made no edits."
+    assert result["patch_format"] == "diff"
+    assert not staging.exists()
 
 
 def test_code_review_reject_auto_retries(tmp_path: Path, monkeypatch) -> None:

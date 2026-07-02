@@ -122,3 +122,18 @@ def delete_branch(repo_path: str | Path, name: str) -> None:
     if not name.strip() or any(char.isspace() for char in name):
         raise GitError("branch name must be non-empty and whitespace-free")
     run_git(repo_path, ["branch", "-D", name])
+
+
+def add_worktree(repo_path: str | Path, staging_path: str | Path) -> None:
+    run_git(repo_path, ["worktree", "add", "--detach", str(staging_path), "HEAD"])
+
+
+def remove_worktree(repo_path: str | Path, staging_path: str | Path) -> None:
+    try:
+        run_git(repo_path, ["worktree", "remove", "--force", str(staging_path)])
+    except GitError:
+        return
+
+
+def diff_worktree(staging_path: str | Path) -> str:
+    return run_git(staging_path, ["diff"]).stdout

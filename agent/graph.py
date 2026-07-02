@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import shutil
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,10 +19,22 @@ from agent.config import Settings
 from agent.state import BSPAgentState
 from agent.tools.artifact_tools import write_json, write_text
 from agent.tools.edit_tools import EditError, apply_edits, parse_edit_blocks, preview_diff
-from agent.tools.git_tools import GitError, checkout_branch, commit_all, push_branch
+from agent.tools.git_tools import (
+    GitError,
+    add_worktree,
+    checkout_branch,
+    commit_all,
+    diff_worktree,
+    push_branch,
+    remove_worktree,
+)
 from agent.tools.llm_tools import LLMConfig, LLMError, chat_completion, strip_json_fence
 from agent.tools.patch_tools import (
+    PatchError,
+    apply_patch,
     changed_files_from_diff,
+    check_patch,
+    extract_diff_from_patch_md,
 )
 from agent.tools.review_tools import run_code_review
 from agent.tools.repo_tools import list_candidate_files
@@ -41,6 +55,7 @@ class RepairGraphState(TypedDict, total=False):
     skill_text: str
     repo_inspection: str
     diff_text: str
+    patch_format: str
     no_patch_reason: str | None
     validate_route: str
     no_patch_route: str
@@ -273,15 +288,64 @@ def patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
     state.stage = "propose_patch"
     from agent.nodes.workflow import _propose_patch
 
+    skill_text = graph_state.get("skill_text", "")
+    repo_inspection = graph_state.get("repo_inspection", "")
+    if settings.patch_agent_agentic:
+        from agent.nodes.workflow import _attempt_dir
+        from agent.tools.patch_agent import run_patch_agent
+        from agent.tools.retry_tools import build_retry_context
+
+        staging_path = Path(tempfile.mkdtemp(prefix=f"bsp-agent-{state.run_id}-"))
+        try:
+            staging_path.rmdir()
+        except OSError:
+            pass
+        staging = str(staging_path)
+        try:
+            add_worktree(state.repo_path, staging)
+            run_patch_agent(
+                staging,
+                state.issue,
+                skill_text,
+                repo_inspection,
+                build_retry_context(state),
+                settings,
+            )
+            diff_text = diff_worktree(staging)
+        finally:
+            remove_worktree(state.repo_path, staging)
+            shutil.rmtree(staging, ignore_errors=True)
+        if not diff_text.strip():
+            _save_state(state)
+            return {
+                "state": state,
+                "diff_text": "NO_PATCH",
+                "no_patch_reason": "Agentic patch agent made no edits.",
+                "patch_format": "diff",
+            }
+        write_text(_attempt_dir(state) / "agentic_patch.diff", diff_text)
+        _save_state(state)
+        return {
+            "state": state,
+            "diff_text": diff_text,
+            "no_patch_reason": None,
+            "patch_format": "diff",
+        }
+
     diff_text, no_patch_reason = _propose_patch(
         state,
         attempt,
-        graph_state.get("skill_text", ""),
-        graph_state.get("repo_inspection", ""),
+        skill_text,
+        repo_inspection,
         settings,
     )
     _save_state(state)
-    return {"state": state, "diff_text": diff_text, "no_patch_reason": no_patch_reason}
+    return {
+        "state": state,
+        "diff_text": diff_text,
+        "no_patch_reason": no_patch_reason,
+        "patch_format": "edit_blocks",
+    }
 
 
 def route_after_patch_agent(graph_state: RepairGraphState) -> Literal["write_no_patch", "validate_patch"]:
@@ -325,30 +389,44 @@ def validate_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
     state = graph_state["state"]
     attempt = state.current_attempt
     state.stage = "validate_patch"
-    edit_text = graph_state.get("diff_text", "")
+    patch_format = graph_state.get("patch_format") or "edit_blocks"
+    patch_input = graph_state.get("diff_text", "")
     from agent.nodes.workflow import _attempt_dir, _patch_markdown
 
     try:
-        blocks = parse_edit_blocks(edit_text)
-        diff_text = preview_diff(state.repo_path, blocks)
-    except EditError as exc:
+        if patch_format == "diff":
+            diff_text = patch_input
+            check_patch(state.repo_path, diff_text)
+        else:
+            blocks = parse_edit_blocks(patch_input)
+            diff_text = preview_diff(state.repo_path, blocks)
+    except (EditError, PatchError) as exc:
         attempt.patch_status = "failed"
         _save_state(state)
+        prefix = "Edit validation failed" if isinstance(exc, EditError) else "Patch validation failed"
         return {
             "state": state,
-            "no_patch_reason": f"Edit validation failed: {exc}",
+            "no_patch_reason": f"{prefix}: {exc}",
             "validate_route": "write_no_patch",
         }
 
     attempt.changed_files = changed_files_from_diff(diff_text)
-    write_text(_attempt_dir(state) / "edits.md", edit_text)
+    if patch_format == "diff":
+        write_text(_attempt_dir(state) / "agentic_patch.diff", diff_text)
+    else:
+        write_text(_attempt_dir(state) / "edits.md", patch_input)
     write_text(
         _attempt_dir(state) / "patch.md",
         _patch_markdown(attempt, diff_text),
     )
     attempt.patch_status = "generated"
     _save_state(state)
-    return {"state": state, "diff_text": diff_text, "validate_route": "code_review_agent"}
+    return {
+        "state": state,
+        "diff_text": diff_text,
+        "patch_format": patch_format,
+        "validate_route": "code_review_agent",
+    }
 
 
 def route_after_validate_patch(
@@ -470,11 +548,16 @@ def apply_patch_node(graph_state: RepairGraphState) -> RepairGraphState:
     state.stage = "apply_patch"
     from agent.nodes.workflow import _attempt_dir, _write_no_patch
 
-    edits_path = _attempt_dir(state) / "edits.md"
     try:
-        blocks = parse_edit_blocks(edits_path.read_text(encoding="utf-8"))
-        apply_edits(state.repo_path, blocks, write=True)
-    except (EditError, OSError) as exc:
+        edits_path = _attempt_dir(state) / "edits.md"
+        if edits_path.exists():
+            blocks = parse_edit_blocks(edits_path.read_text(encoding="utf-8"))
+            apply_edits(state.repo_path, blocks, write=True)
+        else:
+            patch_path = _attempt_dir(state) / "patch.md"
+            diff_text = extract_diff_from_patch_md(patch_path.read_text(encoding="utf-8"))
+            apply_patch(state.repo_path, diff_text)
+    except (EditError, PatchError, OSError) as exc:
         _write_no_patch(state, f"Accepted edits failed to apply: {exc}")
         attempt.patch_status = "failed"
         state.stage = "failed"
