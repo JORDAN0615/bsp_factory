@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     max_loops: int = 3
     code_review_enabled: bool = Field(default=True, alias="CODE_REVIEW_ENABLED")
     react_evidence_enabled: bool = Field(default=False, alias="REACT_EVIDENCE_ENABLED")
+    patch_agent_agentic: bool = Field(default=False, alias="PATCH_AGENT_AGENTIC")
     evidence_recursion_limit: int = Field(default=12, alias="EVIDENCE_RECURSION_LIMIT")
     auto_push_enabled: bool = Field(default=False, alias="AUTO_PUSH_ENABLED")
     git_remote: str = Field(default="origin", alias="GIT_REMOTE")

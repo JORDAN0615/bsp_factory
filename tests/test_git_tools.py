@@ -6,10 +6,13 @@ import pytest
 import agent.tools.git_tools as git_tools
 from agent.tools.git_tools import (
     GitError,
+    add_worktree,
     checkout_branch,
     commit_all,
     current_branch,
+    diff_worktree,
     push_branch,
+    remove_worktree,
     run_git as tool_run_git,
 )
 
@@ -105,3 +108,20 @@ def test_run_git_forces_c_locale(tmp_path: Path, monkeypatch) -> None:
 
     assert captured["env"]["LC_ALL"] == "C"
     assert captured["env"]["LANG"] == "C"
+
+
+def test_worktree_add_diff_remove_roundtrip(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    staging = tmp_path / "staging"
+
+    add_worktree(repo, staging)
+    try:
+        assert (staging / "README.md").exists()
+        (staging / "README.md").write_text("changed\n", encoding="utf-8")
+        diff = diff_worktree(staging)
+        assert "--- a/README.md" in diff
+        assert "+changed" in diff
+    finally:
+        remove_worktree(repo, staging)
+
+    assert not staging.exists()
