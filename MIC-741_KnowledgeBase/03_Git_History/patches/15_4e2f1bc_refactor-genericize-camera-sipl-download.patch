@@ -1,0 +1,39 @@
+commit 4e2f1bc07861cdd3b9663080f8560ac958dd6b65
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Mon Mar 9 10:48:28 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Mon Mar 9 10:48:28 2026 +0800
+
+    refactor: genericize Camera SIPL download and add support for v38.4.0
+
+diff --git a/source/config/task_download_after.sh b/source/config/task_download_after.sh
+index e32b220..b820c9a 100644
+--- a/source/config/task_download_after.sh
++++ b/source/config/task_download_after.sh
+@@ -15,4 +15,25 @@
+ #     2025/09/03, Chris.Ke
+ 
+ set -e
+-jetpack_7.0_download_camera_sipl_v38.2.1
++
++# ==========================================
++TARGET_L4T_VERSION="38.4.0"
++# ==========================================
++
++case "$TARGET_L4T_VERSION" in
++    "38.4.0")
++        URL_SIPL="https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v4.0/release/Jetson_SIPL_API_R38.4.0_aarch64.tbz2"
++        MD5_SIPL="0e7a433679da2bdb5a2ec034c2f3bc6c"
++        ;;
++    "38.2.1")
++        URL_SIPL="https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.1/release/Jetson_SIPL_API_R38.2.1_aarch64.tbz2"
++        MD5_SIPL="b8c50af79a38be8fe98b9c7563763309"
++        ;;
++    *)
++        echo "[ERROR] Unsupported L4T Version: $TARGET_L4T_VERSION"
++        echo "[ERROR] Please add URL and MD5 for this version in task_download_after.sh"
++        exit 1
++        ;;
++esac
++
++jetpack_7_download_camera_sipl "$TARGET_L4T_VERSION" "$URL_SIPL" "$MD5_SIPL"

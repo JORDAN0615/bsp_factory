@@ -1,0 +1,32 @@
+commit c8f55b4d7411fc255718e88578e1dde566214912
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Mon Feb 9 15:38:15 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Mon Feb 9 15:38:15 2026 +0800
+
+    SPI to CAN bus frequency optimize.
+
+diff --git a/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi
+index 5688c3e..49a3dd1 100644
+--- a/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi
++++ b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi
+@@ -232,7 +232,8 @@
+ 				reg = <0x0>;
+ 
+ 				clocks = <&clk40m>;
+-				spi-max-frequency = <50000000>;
++				// MCP2518XFD SPI Max
++				spi-max-frequency = <10000000>;
+ 				interrupts-extended = <&gpio_aon TEGRA264_AON_GPIO(DD, 4) IRQ_TYPE_LEVEL_LOW>;
+ 				nvidia,enable-hw-based-cs;
+ 
+@@ -267,7 +268,8 @@
+ 				reg = <0x0>;
+ 
+ 				clocks = <&clk40m>;
+-				spi-max-frequency = <50000000>;
++				// MCP2518XFD SPI Max
++				spi-max-frequency = <10000000>;
+ 				interrupts-extended = <&gpio_aon TEGRA264_AON_GPIO(DD, 3) IRQ_TYPE_LEVEL_LOW>;
+ 				nvidia,enable-hw-based-cs;
+ 			};

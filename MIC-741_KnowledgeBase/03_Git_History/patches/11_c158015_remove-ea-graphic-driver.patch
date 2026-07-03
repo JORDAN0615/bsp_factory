@@ -1,0 +1,35 @@
+commit c158015fdff862b563ea97e0461cbfd972a8d263
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Thu Feb 5 15:44:51 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Thu Feb 5 15:44:51 2026 +0800
+
+    Remove EA graphic driver.
+
+diff --git a/source/config/task_after_kernel.sh b/source/config/task_after_kernel.sh
+index 6974151..7f65e0c 100644
+--- a/source/config/task_after_kernel.sh
++++ b/source/config/task_after_kernel.sh
+@@ -14,6 +14,3 @@
+ #
+ #     2022/12/21, Chris.Ke
+ 
+-set -e
+-jetpack_7.0_remove_opensrc_disp_for_display_driver_v1
+-jetpack_7.0_use_ea_opensrc_disp_v1
+diff --git a/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-drm.ko b/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-drm.ko
+deleted file mode 100644
+index 371245b..0000000
+Binary files a/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-drm.ko and /dev/null differ
+diff --git a/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-modeset.ko b/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-modeset.ko
+deleted file mode 100644
+index 0d7ae3e..0000000
+Binary files a/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-modeset.ko and /dev/null differ
+diff --git a/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-uvm.ko b/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-uvm.ko
+deleted file mode 100644
+index cb67b95..0000000
+Binary files a/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia-uvm.ko and /dev/null differ
+diff --git a/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia.ko b/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia.ko
+deleted file mode 100644
+index 1107a0b..0000000
+Binary files a/source/modify/driver/rootfs/usr/lib/modules/6.8.12-tegra/updates/opensource-gpu-disp-ea/nvidia.ko and /dev/null differ

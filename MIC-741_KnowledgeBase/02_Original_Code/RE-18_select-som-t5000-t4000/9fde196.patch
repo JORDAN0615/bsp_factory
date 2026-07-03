@@ -1,0 +1,138 @@
+commit 9fde196caf622714510e217b2a89b6189040496c
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Wed Jun 24 10:38:52 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Wed Jun 24 10:38:52 2026 +0800
+
+    feat(config): select SoM T5000/T4000 via bsp_som param
+
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..da4992c
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,48 @@
++# MIC-741 BSP — JetPack 7.2
++
++Advantech MIC-741 (AGX Thor carrier AT7A1) BSP for JetPack 7.2 (L4T r39.2.0 / Tegra264).
++A single code base targets both the **T5000** and **T4000** SoMs via a build parameter,
++while test plans are switched by git branch.
++
++## Two axes
++
++| Axis | Switched by | Values |
++|------|-------------|--------|
++| SoM  | build parameter `bsp_som` | `T5000` (default) / `T4000` |
++| Test plan | git branch | `master` (baseline) / `test/*` (e.g. 25G pattern) |
++
++The two are orthogonal: any branch can be built against any `bsp_som`.
++
++## Build
++
++```sh
++sudo make                  # default T5000
++sudo make bsp_som=T4000    # T4000
++```
++
++`bsp_som` only selects the SoM-dependent fields, defined in `source/config/som/<som>.mk`:
++
++| Field | T5000 | T4000 |
++|-------|-------|-------|
++| `file_dtb` | …+p3834-0008-nv.dtb | …+p3834-0000-nv.dtb |
++| `flash_platform` | jetson-agx-thor-devkit | jetson-agx-thor-t4000 |
++
++Everything else is shared in `source/config/config.mk`. To add a new SoM, drop in another
++`source/config/som/*.mk`.
++
++## Output
++
++Package name: `MIC-741_<SoM>_7.2_V<x.y.z>_SDK.tbz2`, e.g.
++`MIC-741_T5000_7.2_V1.0.0_SDK.tbz2`, `MIC-741_T4000_7.2_V1.0.0_SDK.tbz2`.
++
++## Jenkins
++
++A job combines two knobs — `url_branch` (test plan) × the `bsp_som` env var (SoM):
++
++```sh
++url_branch=master           # or test/25g-pattern
++export bsp_som=T4000        # defaults to T5000 if unset
++```
++
++`source/config/task_jenkins_build.sh` passes `bsp_som` into each build step as a make
++command-line argument.
+diff --git a/source/config/config.mk b/source/config/config.mk
+index 0fc9b4d..2709f41 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -24,8 +24,7 @@ toolchain_prefix=aarch64-none-linux-gnu-
+ config_toolchain_path=aarch64-none-linux-gnu/bin
+ 
+ path_dtb=build/nvidia-public/devicetree/generic-dtbs
+-file_dtb=tegra264-p4071-0000+p3834-0008-nv.dtb
+-flash_platform=jetson-agx-thor-devkit
++# file_dtb / flash_platform are SoM-dependent; pulled in per bsp_som from source/config/som/*.mk (see below)
+ flash_partition=internal
+ flash_external_xml=tools/kernel_flash/flash_l4t_t264_nvme.xml
+ flash_qspi_xml=empty
+@@ -95,7 +94,9 @@ som_board_rev=H.0
+ som_fuse_level=fuselevel_production
+ 
+ bsp_board=MIC-741
+-bsp_som=T5000
++# SoM selection: defaults to T5000, override with `make bsp_som=T4000`; maps to source/config/som/<som>.mk
++bsp_som ?= T5000
++include source/config/som/$(shell echo $(bsp_som) | tr A-Z a-z).mk
+ bsp_jetpack=7.2
+ bsp_jetpack_step=
+ bsp_version=V1.0.0
+diff --git a/source/config/som/t4000.mk b/source/config/som/t4000.mk
+new file mode 100644
+index 0000000..99df105
+--- /dev/null
++++ b/source/config/som/t4000.mk
+@@ -0,0 +1,4 @@
++# SoM profile: AGX Thor 64G (2^6) -> T4000
++# Auto-included by source/config/config.mk based on bsp_som; SoM-dependent fields only.
++file_dtb=tegra264-p4071-0000+p3834-0000-nv.dtb
++flash_platform=jetson-agx-thor-t4000
+diff --git a/source/config/som/t5000.mk b/source/config/som/t5000.mk
+new file mode 100644
+index 0000000..288df66
+--- /dev/null
++++ b/source/config/som/t5000.mk
+@@ -0,0 +1,4 @@
++# SoM profile: AGX Thor 128G (2^7) -> T5000
++# Auto-included by source/config/config.mk based on bsp_som; SoM-dependent fields only.
++file_dtb=tegra264-p4071-0000+p3834-0008-nv.dtb
++flash_platform=jetson-agx-thor-devkit
+diff --git a/source/config/task_jenkins_build.sh b/source/config/task_jenkins_build.sh
+index 606517c..2f845af 100644
+--- a/source/config/task_jenkins_build.sh
++++ b/source/config/task_jenkins_build.sh
+@@ -29,16 +29,20 @@ set -e
+ # Build the BSP source for the customer
+ # sudo make release_s
+ 
++# Select the SoM (passed from the Jenkins job as env var bsp_som; default T5000).
++# Passed as a make command-line argument so it survives the nested sudo make.
++SOM="${bsp_som:-T5000}"
++
+ # Build the BSP SDK for customer
+-sudo make
+-sudo make release_o
++sudo make bsp_som=$SOM
++sudo make release_o bsp_som=$SOM
+ 
+ # Build the BSP Kernel and Device Tree
+-sudo make
+-sudo make release_k
++sudo make bsp_som=$SOM
++sudo make release_k bsp_som=$SOM
+ 
+ # Build the test tool
+-# sudo make extra
++# sudo make extra bsp_som=$SOM
+ 
+ # Create the version folder location for remote file server
+-sudo make jenkins_u
++sudo make jenkins_u bsp_som=$SOM

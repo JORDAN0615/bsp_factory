@@ -1,0 +1,21 @@
+commit 0b4ad00df3eda76c28379c0459358c730c479d04
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Fri Jan 16 11:16:49 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Fri Jan 16 11:16:49 2026 +0800
+
+    Unplug NVPModel fix.
+
+diff --git a/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh b/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
+index 4f2eb1c..1829a2e 100755
+--- a/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
++++ b/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
+@@ -65,7 +65,7 @@ start () {
+ 	echo "BSP_INIT: Script started." > /dev/kmsg
+ 	enable_audio
+ 	init_pinmux_gpio
+-	fix_nvpmodel &
++	# fix_nvpmodel &
+ }
+ 
+ $1 "${@:2}"

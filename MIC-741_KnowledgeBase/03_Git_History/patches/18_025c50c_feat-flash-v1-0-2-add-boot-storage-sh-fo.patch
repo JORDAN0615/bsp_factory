@@ -1,0 +1,42 @@
+commit 025c50c48114230d7457fd5e5b0c296311a599a4
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Tue Mar 24 16:58:53 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Tue Mar 24 16:58:53 2026 +0800
+
+    feat(flash): [v1.0.2] add boot_storage.sh for dynamic NVMe path switching
+    
+    - Implement `jetpack_7.0_create_adv_boot_storage_v2` to generate the helper script.
+    - Support dynamic modification of `EXTERNAL_DEVICE` in `jetson-agx-thor-devkit.conf`.
+    - Use `sed --follow-symlinks` to ensure configuration link integrity is preserved.
+    - Decouple parameter setup from the flash process for a safer, manual workflow.
+    - Registered the new function call in `task_patch.sh`.
+
+diff --git a/source/config/config.mk b/source/config/config.mk
+index 1c32a3e..71418df 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -98,11 +98,11 @@ bsp_board=MIC-741
+ bsp_som=Thor
+ bsp_jetpack=7.1
+ bsp_jetpack_step=
+-bsp_version=V1.0.1
++bsp_version=V1.0.2
+ bsp_version_path=/opt
+ 
+ pchain_git=git@172.17.4.45:isystem-esg-linux-bsp/patch_package_list.git
+ 
+ framework_git=git@172.17.4.45:isystem-esg-linux-bsp/framework_ria.git
+ framework_branch=master
+-framework_commit=33c32d52
++framework_commit=26bf04ec
+diff --git a/source/config/task_patch.sh b/source/config/task_patch.sh
+index 2534d9d..64e4df1 100644
+--- a/source/config/task_patch.sh
++++ b/source/config/task_patch.sh
+@@ -36,4 +36,5 @@ jetpack_7.0_create_adv_only_flash_v2
+ jetpack_7.0_create_adv_qspi_only_v1
+ jetpack_7.0_create_adv_flash_v1
+ jetpack_7.0_create_adv_qspi_v1
++jetpack_7.0_create_adv_boot_storage_v2
+ jetpack_7.0_tool_enable_usb2_0_host_mode_v1 work

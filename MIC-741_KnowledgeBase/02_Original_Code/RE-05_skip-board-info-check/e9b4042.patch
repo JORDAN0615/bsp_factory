@@ -1,0 +1,20 @@
+commit e9b4042abd0852c628a716f88f560e5c9d71ea75
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Thu Feb 5 16:33:41 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Thu Feb 5 16:33:41 2026 +0800
+
+    Skip board information check.
+
+diff --git a/source/modify/driver/p3834-0008-p4071-0000-nvme.conf b/source/modify/driver/p3834-0008-p4071-0000-nvme.conf
+index e08cdab..d320017 100644
+--- a/source/modify/driver/p3834-0008-p4071-0000-nvme.conf
++++ b/source/modify/driver/p3834-0008-p4071-0000-nvme.conf
+@@ -42,6 +42,7 @@ DTB_FILE="tegra264-p4071-0000+p3834-0008-nv.dtb";
+ TBCDTB_FILE="${DTB_FILE}";
+ BPFDTB_FILE="tegra264-bpmp-3834-0008-4071-xxxx.dtb";
+ BPFFILE="bootloader/bpmp_t264-TA1090SA-A1_prod.bin";
++SKIP_EEPROM_CHECK=1
+ 
+ EXTERNAL_PT_LAYOUT="tools/kernel_flash/flash_l4t_t264_nvme.xml";
+ EMC_BCT="tegra264-p3834-0008-sdram-bct-l4t.dts";

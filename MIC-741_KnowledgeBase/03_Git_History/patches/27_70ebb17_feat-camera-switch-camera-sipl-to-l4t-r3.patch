@@ -1,0 +1,28 @@
+commit 70ebb178d42f458d2513326f102ea83215a6fc12
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Tue Jun 23 13:53:38 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Tue Jun 23 13:53:38 2026 +0800
+
+    feat(camera): switch Camera SIPL to L4T r39.2.0 for JetPack 7.2
+
+diff --git a/source/config/task_download_after.sh b/source/config/task_download_after.sh
+index b820c9a..2b49517 100644
+--- a/source/config/task_download_after.sh
++++ b/source/config/task_download_after.sh
+@@ -17,10 +17,14 @@
+ set -e
+ 
+ # ==========================================
+-TARGET_L4T_VERSION="38.4.0"
++TARGET_L4T_VERSION="39.2.0"
+ # ==========================================
+ 
+ case "$TARGET_L4T_VERSION" in
++    "39.2.0")
++        URL_SIPL="https://developer.nvidia.com/downloads/embedded/L4T/r39_Release_v2.0/release/Jetson_SIPL_API_R39.2.0_aarch64.tbz2"
++        MD5_SIPL="3e9b8a80e91e9ff3504207beb48582b1"
++        ;;
+     "38.4.0")
+         URL_SIPL="https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v4.0/release/Jetson_SIPL_API_R38.4.0_aarch64.tbz2"
+         MD5_SIPL="0e7a433679da2bdb5a2ec034c2f3bc6c"

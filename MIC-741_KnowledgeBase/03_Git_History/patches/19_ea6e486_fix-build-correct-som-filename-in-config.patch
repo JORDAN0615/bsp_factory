@@ -1,0 +1,21 @@
+commit ea6e48644cec8e76283a9354e7023f58fa320d11
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Wed Mar 25 14:34:56 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Wed Mar 25 14:34:56 2026 +0800
+
+    fix(build): correct SoM filename in config.mk
+
+diff --git a/source/config/config.mk b/source/config/config.mk
+index 71418df..dd120d2 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -95,7 +95,7 @@ som_board_rev=H.0
+ som_fuse_level=fuselevel_production
+ 
+ bsp_board=MIC-741
+-bsp_som=Thor
++bsp_som=T5000
+ bsp_jetpack=7.1
+ bsp_jetpack_step=
+ bsp_version=V1.0.2

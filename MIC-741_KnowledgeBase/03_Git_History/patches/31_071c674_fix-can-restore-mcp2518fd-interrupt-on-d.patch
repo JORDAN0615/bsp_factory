@@ -1,0 +1,396 @@
+commit 071c67430ab7cc33bb350cc10109437f6ebaa60a
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Fri Jun 26 10:44:25 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Fri Jun 26 10:49:33 2026 +0800
+
+    fix(can): restore MCP2518FD interrupt + on-demand enable on JP7.2
+    
+    CAN (can0/can1) was completely dead on JP7.2. Two root causes:
+    
+    - pinmux: JP7.2's regenerated MB1 BCT flipped nvidia,enable-input from
+      ENABLE (7.1) to DISABLE on the CAN INT pins (soc_gpio21_pdd3 /
+      soc_gpio22_pdd4); the SoC never senses the line so the IRQ never fires.
+      Restored to ENABLE (requires bootloader/BCT reflash).
+    - the INT line is held LOW (not a real idle-high INT) -> the level-low IRQ
+      storms and gets spurious-disabled, and self-start is flaky on the R39
+      kernel. can_enable.sh nudges the GPIO interrupt-enable bit until genirq
+      settles it into poll mode.
+    
+    can_enable.sh is seeded via rootfs /etc/skel (auto-installed to
+    /home/mic-741). CAN is OFF by default for AD safety; enable on demand
+    with: sudo ~/can_enable.sh. See docs/can-bus-pinmux-interrupt.md.
+
+diff --git a/README.md b/README.md
+index da4992c..2fedccc 100644
+--- a/README.md
++++ b/README.md
+@@ -30,11 +30,46 @@ sudo make bsp_som=T4000    # T4000
+ Everything else is shared in `source/config/config.mk`. To add a new SoM, drop in another
+ `source/config/som/*.mk`.
+ 
++### Switching SoM in the same workspace
++
++The prepare/base stages are cached and the kernel build container is named per `bsp_som`
++(`nvidia_jetson_<som>_jetpack_7.2_kernel`), so an in-place switch needs that stage rebuilt:
++
++```sh
++sudo rm -rf build/task        # force prepare/base to re-run for the new SoM
++sudo make bsp_som=T4000
++```
++
++Both Thor SoMs share the same kernel, so as a faster shortcut you can re-tag the existing
++container instead of a full rebuild:
++
++```sh
++sudo docker tag nvidia_jetson_t5000_jetpack_7.2_kernel nvidia_jetson_t4000_jetpack_7.2_kernel
++sudo make bsp_som=T4000
++```
++
++Jenkins is unaffected: each job starts from a clean workspace, so prepare runs fresh per SoM.
++
+ ## Output
+ 
+ Package name: `MIC-741_<SoM>_7.2_V<x.y.z>_SDK.tbz2`, e.g.
+ `MIC-741_T5000_7.2_V1.0.0_SDK.tbz2`, `MIC-741_T4000_7.2_V1.0.0_SDK.tbz2`.
+ 
++## CAN bus
++
++CAN (SPI-CAN, MCP2518FD) is **disabled by default** for autonomous-driving safety and is
++enabled on demand. `can_enable.sh` is pre-installed in the default user's home (seeded via
++`source/modify/driver/rootfs/etc/skel/`, so it lands in `/home/mic-741/` at build time):
++
++```sh
++sudo ~/can_enable.sh        # configures expanders, brings up can0/can1 (CAN-FD), applies INT workaround
++```
++
++The script also applies a required runtime work-around for the held-low interrupt line; see
++[docs/can-bus-pinmux-interrupt.md](docs/can-bus-pinmux-interrupt.md) for the full root-cause
++analysis (includes the build-time MB1 BCT pinmux `enable-input` fix that must also be in the
++flashed image).
++
+ ## Jenkins
+ 
+ A job combines two knobs — `url_branch` (test plan) × the `bsp_som` env var (SoM):
+diff --git a/docs/can-bus-pinmux-interrupt.md b/docs/can-bus-pinmux-interrupt.md
+new file mode 100644
+index 0000000..f9dcb6c
+--- /dev/null
++++ b/docs/can-bus-pinmux-interrupt.md
+@@ -0,0 +1,205 @@
++# CAN bus (SPI-CAN / MCP2518FD) not working on JP7.2 — root cause & workaround
++
++## TL;DR
++
++Getting CAN reliable on MIC-741 / JP7.2 needs **two** things:
++
++1. **Pinmux fix (build-time, necessary):** the MB1 BCT pinmux must have
++   `nvidia,enable-input = ENABLE` on the two CAN interrupt pins. JP7.2's regenerated BCT had
++   it `DISABLE`, which alone makes CAN completely dead. Already restored in
++   `source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi`.
++2. **Runtime nudge (workaround, necessary):** the CAN interrupt pins are physically held
++   LOW, which makes the GPIO interrupt flaky (some boots it gets stuck and CAN never works).
++   After bringing CAN up, run a small "nudge" loop (below) to force the interrupt into a
++   stable polled state.
++
++The clean long-term fix is hardware (route a real, idle-high MCP2518FD INT pin); the nudge
++is a software work-around for the current board.
++
++> Because CAN is **disabled by default for autonomous-driving safety** and only enabled on
++> demand, the nudge belongs **inside the CAN-enable command/script** (run right after
++> `ip link up`), not in a boot service.
++
++## Hardware background
++
++| Item | Detail |
++|------|--------|
++| CAN controllers | Two Microchip MCP2518FD (`microchip,mcp251xfd` driver) |
++| Interface | SPI (entire data path is over SPI); can0 = spi1.0, can1 = spi0.0 |
++| SPI controllers | can0 → `spi@810c590000` (SPI1), can1 → `spi@c6c0000` (SPI2) |
++| 40 MHz clock | `clk40m` fixed-clock (identical in 7.1/7.2 — not the problem) |
++| Interrupt pins | AON GPIO `PDD.03` / `PDD.04` (`soc_gpio21_pdd3` / `soc_gpio22_pdd4`) |
++
++### Key hardware fact: the INT pins are held LOW (not a real idle-high INT)
++
++`PDD.03` / `PDD.04` are **not wired to the MCP2518FD INT pins as a normal idle-high
++interrupt**. On this board they sit **permanently LOW** (verified: `gpioget gpiochip0 21 22`
++returns `0 0`, and the level does not follow the pad pull-up/down — it is externally driven
++low). The mcp251xfd driver requires an `interrupts` property, so the DT points it at these
++pins anyway.
++
++Consequence: a `IRQ_TYPE_LEVEL_LOW` interrupt on a permanently-low line is **always
++asserted**, so it storms. See "Why it is flaky" below.
++
++## Part 1 — Pinmux `enable-input` regression (build-time, necessary fix)
++
++The only functional pinmux difference between 7.1 (working) and 7.2 (broken):
++
++`source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi`
++
++| pin | property | JP7.1 | JP7.2 (broken) |
++|-----|----------|-------|----------------|
++| `soc_gpio21_pdd3` (can0 INT) | `nvidia,enable-input` | `ENABLE` | `DISABLE` |
++| `soc_gpio22_pdd4` (can1 INT) | `nvidia,enable-input` | `ENABLE` | `DISABLE` |
++
++With `enable-input = DISABLE` the pad input buffer is off, so the SoC cannot even sense the
++line → the interrupt can never fire → CAN is 100% dead. Origin: JP7.2 regenerated the BCT
++from the new pinmux spreadsheet (`T264_Pinmux_Config_CVM_Jedha_P4070.xlsm`) and reverted the
++customized pins to defaults (same class of regression as the I2C3/bus3 timeout case).
++
++Fix — restore `enable-input = ENABLE`, **keep everything else identical to 7.1** (do NOT
++change `pull`; `PULL_DOWN` is required so the placeholder pad reads LOW):
++
++```dts
++soc_gpio21_pdd3 {
++    nvidia,pins = "soc_gpio21_pdd3";
++    nvidia,function = "rsvd0";
++    nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
++    nvidia,tristate = <TEGRA_PIN_ENABLE>;
++    nvidia,enable-input = <TEGRA_PIN_ENABLE>;  /* FIX (was DISABLE in JP7.2) */
++    nvidia,drv-type = <TEGRA_PIN_1X_DRIVER>;
++    nvidia,e-io-od = <TEGRA_PIN_DISABLE>;
++    nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
++};
++soc_gpio22_pdd4 {
++    nvidia,pins = "soc_gpio22_pdd4";
++    nvidia,function = "rsvd0";
++    nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
++    nvidia,tristate = <TEGRA_PIN_ENABLE>;
++    nvidia,enable-input = <TEGRA_PIN_ENABLE>;  /* FIX */
++    nvidia,drv-type = <TEGRA_PIN_1X_DRIVER>;
++    nvidia,e-io-od = <TEGRA_PIN_DISABLE>;
++    nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
++};
++```
++
++> This pinmux is in the **MB1 BCT (bootloader)**. After editing, **rebuild and reflash the
++> bootloader/BCT** (e.g. `advantech/qspi_only.sh` or a full flash). Rebuilding the kernel DTB
++> alone does **not** apply it. Verify on target with:
++> `sudo busybox devmem 0xc7a3058 32` and `0xc7a3060` → bit 6 (E_INPUT) must read `1`
++> (value `0x00203454`).
++
++This fix is **necessary but not sufficient** — with it applied, CAN still behaves flakily
++because of the held-low line (Part 2).
++
++## Part 2 — Held-low INT pin → flaky interrupt (the deeper problem)
++
++With `enable-input = ENABLE`, the level-low interrupt on the permanently-low line is always
++asserted and **storms**. What happens next is non-deterministic per boot:
++
++- **Good boot:** it storms, the count crosses Linux's spurious threshold (100000), genirq
++  auto-disables it (`dmesg`: `irq N: nobody cared, Disabling IRQ`) and then **polls** the
++  handler (~10 Hz). mcp251xfd gets serviced → CAN works, CPU idle.
++- **Bad boot:** the interrupt gets masked early (e.g. after ~28 fires) and is never
++  re-enabled → IRQ count stays low, handler never runs → CAN dead.
++
++Verified by experiment on one cold boot: `/proc/interrupts` count `0`, CAN dead; manually
++setting the GPIO interrupt-enable bit kicked the storm and CAN immediately worked. Different
++boots give different results — it is genuinely flaky.
++
++Why it cannot be fixed purely in pinmux/DT: the line is held LOW regardless of pull, and the
++handler finds no real IC interrupt (the pin is not the IC's INT), so the only "fix" in
++software is to force it into the stable storm→disable→poll state — see workaround.
++
++## Workaround — "bounded nudge" inside the CAN-enable command
++
++Run this **after** `ip link set canX up` (the IRQ must already be requested). It re-enables
++the GPIO interrupt until the count crosses the spurious threshold on **both** controllers,
++which forces genirq to disable+poll → stable. It is **bounded** (stops at the threshold) on
++purpose.
++
++```bash
++#!/bin/bash
++# MIC-741 JP7.2 — enable CAN (on demand) + INT-storm nudge workaround.
++# CAN is OFF by default (AD safety); this is the explicit enable command.
++set -e
++
++# 1) SPI-CAN I/O expanders / transceivers
++for c in "0x74 0x07 0x0f" "0x74 0x03 0xf0" "0x75 0x07 0xfb" "0x75 0x03 0x00"; do
++    i2cset -f -y 3 $c
++done
++
++# 2) Bring up CAN FD interfaces
++for i in 0 1; do
++    ip link set can$i down 2>/dev/null || true
++    ip link set can$i up type can bitrate 500000 dbitrate 8000000 \
++        berr-reporting on fd on loopback off
++done
++
++# 3) Nudge the held-low INT GPIO so the storming IRQ crosses the genirq spurious
++#    threshold, gets auto-disabled, and settles into poll-recovery mode.
++#    Bounded: stops as soon as both lines are past 100k (≈2–12 s, ~10 writes).
++#    AON GPIO base 0xcf10000; PDD.03 ENABLE_CONFIG=+0x660, PDD.04=+0x680.
++#    0x45 = ENABLE(bit0) | TRIGGER_LEVEL(bit2) | INTERRUPT(bit6).
++for n in $(seq 1 60); do
++    c1=$(awk '/spi1.0/{print $2}' /proc/interrupts)
++    c0=$(awk '/spi0.0/{print $2}' /proc/interrupts)
++    [ "${c1:-0}" -gt 100000 ] && [ "${c0:-0}" -gt 100000 ] && break
++    busybox devmem 0xcf10660 32 0x45   # AON GPIO PDD.03 (can0 INT)
++    busybox devmem 0xcf10680 32 0x45   # AON GPIO PDD.04 (can1 INT)
++    sleep 0.2
++done
++```
++
++### Critical do / don't
++
++- **DO** run the nudge only **after** `ip link up`.
++- **DO** keep it **bounded** (stop once both counts > 100000).
++  ⚠️ A *continuous* nudge (e.g. re-writing every 20 ms forever) drives an uncontrolled
++  storm (~260k irq/s) that hangs the box until the hardware watchdog reboots it.
++- **DON'T** use the `irqpoll` kernel cmdline. It "works" but polls *all* IRQs system-wide
++  (observed load average ~6, unrelated irq threads at ~50% CPU). The bounded nudge keeps
++  CPU ~idle.
++- **DON'T** change `pull` to `PULL_UP` — the placeholder pad must read LOW.
++
++## Verification (after the enable command)
++
++```sh
++# IRQ should be frozen ~100001 (spurious-disabled into poll mode):
++grep -E "spi1.0|spi0.0" /proc/interrupts
++# dmesg should show one round of: irq N: nobody cared, Disabling IRQ   (expected, benign)
++
++# Functional test:
++sudo candump -t z can1 &
++sudo cansend can0 100##7AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++```
++
++Expected after the workaround (validated on fresh boots): slow / fast-burst / sustained /
++bidirectional traffic all pass with `dropped=0, errors=0`, and CPU stays ~90%+ idle.
++
++## Proper (long-term) fix — hardware
++
++Route the real MCP2518FD INT pin to a GPIO that **idles HIGH and pulses LOW only on
++events**. That removes the permanent assertion, so the interrupt is clean and
++deterministic, and both the nudge workaround and the storm/spurious-disable behavior go
++away. The pinmux `enable-input = ENABLE` (Part 1) is still required.
++
++## Register reference (T264, SoC-fixed addresses)
++
++| What | Address | Notes |
++|------|---------|-------|
++| Pad PDD.03 (E_INPUT bit6) | `0xc7a3058` | AON pinmux `0xc7a2000` + `0x1058` |
++| Pad PDD.04 | `0xc7a3060` | + `0x1060` |
++| GPIO ENABLE_CONFIG PDD.03 | `0xcf10660` | AON gpio `0xcf10000`, bank0/port3, pin3 |
++| GPIO ENABLE_CONFIG PDD.04 | `0xcf10680` | pin4. bit0=ENABLE, [3:2]=trigger(1=LEVEL), bit4=level(0=low), bit6=INTERRUPT |
++| GPIO INPUT PDD.03 / .04 | `+0x08` | `0xcf10668` / `0xcf10688`, bit0 = line high |
++
++## Related
++
++- Same-class build-time regression (I2C3/bus3 `I2C transfer timed out`): customized pinmux
++  pins reverted by the regenerated JP7.2 BCT.
++- A per-pin 7.1↔7.2 pinmux audit also flagged SPI3/TPM (`spi3_*` → rsvd1 + input disabled,
++  `dmesg`: `tpm_tis_spi: probe of spi2.0 failed -110`) and others (UART9, UFS0,
++  extperiph1–4, PWM2/3) — verify against actual MIC-741 usage before restoring.
++- DT node: `source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi`
++  (`spi@810c590000` / `spi@c6c0000` / `clk40m`).
+diff --git a/source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi b/source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi
+index ae49f09..11814dd 100644
+--- a/source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi
++++ b/source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi
+@@ -1390,7 +1390,7 @@ pinmux@ac281000 {
+ 				nvidia,function = "rsvd0";
+ 				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+ 				nvidia,tristate = <TEGRA_PIN_ENABLE>;
+-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
++				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_1X_DRIVER>;
+ 				nvidia,e-io-od = <TEGRA_PIN_DISABLE>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+@@ -1401,7 +1401,7 @@ pinmux@ac281000 {
+ 				nvidia,function = "rsvd0";
+ 				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+ 				nvidia,tristate = <TEGRA_PIN_ENABLE>;
+-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
++				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_1X_DRIVER>;
+ 				nvidia,e-io-od = <TEGRA_PIN_DISABLE>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+diff --git a/source/modify/driver/rootfs/etc/skel/can_enable.sh b/source/modify/driver/rootfs/etc/skel/can_enable.sh
+new file mode 100755
+index 0000000..f17bbef
+--- /dev/null
++++ b/source/modify/driver/rootfs/etc/skel/can_enable.sh
+@@ -0,0 +1,83 @@
++#!/bin/bash
++#
++# can_enable.sh — MIC-741 (JP7.2 / T264) on-demand CAN enable
++#
++# CAN is OFF by default for autonomous-driving safety; this script is the
++# explicit enable command. It:
++#   1. configures the SPI-CAN I/O expanders / transceivers
++#   2. brings up can0 / can1 as CAN-FD
++#   3. applies the "INT-storm nudge" workaround
++#
++# Why the nudge: the MCP2518FD interrupt pins (AON GPIO PDD.03/PDD.04) are held
++# LOW on this board, so the level-low IRQ is permanently asserted and storms.
++# Some boots leave it stuck-masked and CAN never works. Nudging re-enables the
++# GPIO interrupt until the count crosses the genirq spurious threshold (100000)
++# on both controllers; genirq then auto-disables it and polls the handler,
++# which is the stable working state (CPU stays idle).
++#
++# NOTE: This is a software work-around for a hardware issue (the INT line is not
++# a real idle-high INT). The proper fix is to route a real idle-high MCP2518FD
++# INT pin in hardware. Also requires the MB1 BCT pinmux fix (enable-input=ENABLE
++# on soc_gpio21_pdd3 / soc_gpio22_pdd4); see docs/can-bus-pinmux-interrupt.md.
++#
++# Usage: sudo ./can_enable.sh
++#
++set -u
++
++# --- config ---------------------------------------------------------------
++I2C_BUS=3
++BITRATE=500000
++DBITRATE=8000000
++IFACES="can0 can1"
++
++# AON GPIO ENABLE_CONFIG registers (T264, SoC-fixed):
++#   base 0xcf10000, port DD = bank0/port3 -> +0x600, pin*0x20
++#   PDD.03 (can0 INT) = 0xcf10660, PDD.04 (can1 INT) = 0xcf10680
++# value 0x45 = ENABLE(bit0) | TRIGGER_LEVEL(bit2) | INTERRUPT(bit6)
++NUDGE_REGS="0xcf10660 0xcf10680"
++NUDGE_VAL=0x45
++NUDGE_THRESH=100000     # genirq spurious-disable threshold
++NUDGE_MAX_ITERS=60      # bounded: ~12 s worst case (must NOT loop forever)
++NUDGE_SLEEP=0.2
++# --------------------------------------------------------------------------
++
++if [ "$(id -u)" -ne 0 ]; then
++    echo "[can_enable] must run as root (use sudo)" >&2
++    exit 1
++fi
++
++echo "[can_enable] 1/3 configuring SPI-CAN I/O expanders on i2c-${I2C_BUS}"
++i2cset -f -y "$I2C_BUS" 0x74 0x07 0x0f
++i2cset -f -y "$I2C_BUS" 0x74 0x03 0xf0
++i2cset -f -y "$I2C_BUS" 0x75 0x07 0xfb
++i2cset -f -y "$I2C_BUS" 0x75 0x03 0x00
++
++echo "[can_enable] 2/3 bringing up: ${IFACES}"
++for ifc in $IFACES; do
++    ip link set "$ifc" down 2>/dev/null || true
++    ip link set "$ifc" up type can \
++        bitrate "$BITRATE" dbitrate "$DBITRATE" \
++        berr-reporting on fd on loopback off
++done
++
++echo "[can_enable] 3/3 nudging held-low INT GPIO into stable polled state"
++reached=0
++for n in $(seq 1 "$NUDGE_MAX_ITERS"); do
++    c1=$(awk '/spi1.0/{print $2}' /proc/interrupts)
++    c0=$(awk '/spi0.0/{print $2}' /proc/interrupts)
++    if [ "${c1:-0}" -gt "$NUDGE_THRESH" ] && [ "${c0:-0}" -gt "$NUDGE_THRESH" ]; then
++        echo "[can_enable]   storm threshold reached (iter ${n}, spi1.0=${c1} spi0.0=${c0})"
++        reached=1
++        break
++    fi
++    for r in $NUDGE_REGS; do busybox devmem "$r" 32 "$NUDGE_VAL"; done
++    sleep "$NUDGE_SLEEP"
++done
++[ "$reached" -eq 1 ] || echo "[can_enable]   WARNING: threshold not reached after ${NUDGE_MAX_ITERS} iters; CAN may be unreliable"
++
++echo "[can_enable] done. quick status:"
++for ifc in $IFACES; do
++    state=$(ip -br link show "$ifc" 2>/dev/null | awk '{print $2}')
++    echo "  ${ifc}: ${state}"
++done
++echo "  (test: 'candump can1 &' then 'cansend can0 100##7AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')"

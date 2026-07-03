@@ -1,0 +1,84 @@
+commit f1dbd213c8259136afc74357e695bcdfd4913a45
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Thu Feb 5 15:59:10 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Thu Feb 5 15:59:10 2026 +0800
+
+    Enable CAN bus for JetPack 7.1.
+
+diff --git a/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts
+new file mode 100644
+index 0000000..c8a4903
+--- /dev/null
++++ b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts
+@@ -0,0 +1,32 @@
++// SPDX-License-Identifier: GPL-2.0-only
++// SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
++/dts-v1/;
++
++#include "tegra264-p4071-0000+p3834-0008-nv.dts"
++
++/ {
++	model = "NVIDIA Jetson AGX Thor Developer Kit";
++	compatible = "nvidia,p4071-0008+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
++
++	bus@0 {
++		mttcan@81102f0000 {
++			status = "okay";
++		};
++
++		mttcan@8110300000 {
++			status = "okay";
++		};
++
++		mttcan@8110330000 {
++			status = "okay";
++		};
++
++		mttcan@8110340000 {
++			status = "okay";
++		};
++	};
++
++	ufshci@a80b8d0000 {
++		status = "okay";
++	};
++};
+diff --git a/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts b/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts
+new file mode 100644
+index 0000000..fe8365f
+--- /dev/null
++++ b/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts
+@@ -0,0 +1,32 @@
++// SPDX-License-Identifier: GPL-2.0-only
++// SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
++/dts-v1/;
++
++#include "tegra264-p4071-0000+p3834-0008-nv.dts"
++
++/ {
++	model = "NVIDIA Jetson AGX Thor Developer Kit";
++	compatible = "nvidia,p4071-0008+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
++
++	bus@0 {
++		mttcan@81102f0000 {
++			status = "disabled";
++		};
++
++		mttcan@8110300000 {
++			status = "disabled";
++		};
++
++		mttcan@8110330000 {
++			status = "disabled";
++		};
++
++		mttcan@8110340000 {
++			status = "disabled";
++		};
++	};
++
++	ufshci@a80b8d0000 {
++		status = "okay";
++	};
++};

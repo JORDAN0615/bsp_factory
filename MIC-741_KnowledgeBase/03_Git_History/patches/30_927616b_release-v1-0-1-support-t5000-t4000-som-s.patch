@@ -1,0 +1,21 @@
+commit 927616b8aca90067b962a95653dfe44695cf1981
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Wed Jun 24 10:41:10 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Wed Jun 24 10:41:10 2026 +0800
+
+    release: V1.0.1 - support T5000/T4000 SoM selection via bsp_som
+
+diff --git a/source/config/config.mk b/source/config/config.mk
+index 2709f41..bfdd6f0 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -99,7 +99,7 @@ bsp_som ?= T5000
+ include source/config/som/$(shell echo $(bsp_som) | tr A-Z a-z).mk
+ bsp_jetpack=7.2
+ bsp_jetpack_step=
+-bsp_version=V1.0.0
++bsp_version=V1.0.1
+ bsp_version_path=/opt
+ 
+ pchain_git=git@172.17.4.45:isystem-esg-linux-bsp/patch_package_list.git

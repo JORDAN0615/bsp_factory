@@ -1,0 +1,20 @@
+commit aad899215f1770f4d7a58bc80d5c92133e04fcf6
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Thu May 21 14:00:15 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Thu May 21 14:00:15 2026 +0800
+
+    fix MGBE1 RST pin gpio definition conflict
+
+diff --git a/source/modify/driver/bootloader/tegra264-mb1-bct-gpio-p3834-xxxx-p4071-0000.dtsi b/source/modify/driver/bootloader/tegra264-mb1-bct-gpio-p3834-xxxx-p4071-0000.dtsi
+index e119cd1..da0ce3e 100644
+--- a/source/modify/driver/bootloader/tegra264-mb1-bct-gpio-p3834-xxxx-p4071-0000.dtsi
++++ b/source/modify/driver/bootloader/tegra264-mb1-bct-gpio-p3834-xxxx-p4071-0000.dtsi
+@@ -46,7 +46,6 @@ gpio@ac300000 {
+ 			TEGRA264_MAIN_GPIO(S, 1)
+ 			TEGRA264_MAIN_GPIO(T, 6)
+ 			TEGRA264_MAIN_GPIO(U, 0)
+-			TEGRA264_MAIN_GPIO(U, 4)
+ 			TEGRA264_MAIN_GPIO(U, 5)
+ 			TEGRA264_MAIN_GPIO(U, 7)
+ 			TEGRA264_MAIN_GPIO(W, 0)

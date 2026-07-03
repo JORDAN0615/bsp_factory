@@ -1,0 +1,11 @@
+# Let NetworkManager manage all devices on this system
+network:
+  version: 2
+  renderer: NetworkManager
+  ethernets:
+    mgbe0_0:
+      dhcp4: true
+      optional: true
+    mgbe1_0:
+      dhcp4: true
+      optional: true

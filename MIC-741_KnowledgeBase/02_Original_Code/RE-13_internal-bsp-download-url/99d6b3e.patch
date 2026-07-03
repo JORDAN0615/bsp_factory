@@ -1,0 +1,30 @@
+commit 99d6b3ecca5b9ff70729ba36395fd227ed814994
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Wed Jun 17 10:18:35 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Wed Jun 17 10:18:35 2026 +0800
+
+    config: point JP7.2 BSP download URLs to internal server
+    
+    Switch driver/rootfs/source URLs in config.mk from developer.nvidia.com
+    to internal mirror 172.17.22.195/tftp/NCG/mic/jp7.2.
+
+diff --git a/source/config/config.mk b/source/config/config.mk
+index 412ca8b..4ac6783 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -1,11 +1,11 @@
+-url_driver=https://developer.nvidia.com/downloads/embedded/L4T/r39_Release_v2.0/release/Jetson_Linux_R39.2.0_aarch64.tbz2
++url_driver=http://172.17.22.195/tftp/NCG/mic/jp7.2/Jetson_Linux_R39.2.0_aarch64.tbz2
+ folder_driver=Linux_for_Tegra
+ file_driver=sdk.tbz2
+ 
+-url_rootfs=https://developer.nvidia.com/downloads/embedded/L4T/r39_Release_v2.0/release/Tegra_Linux_Sample-Root-Filesystem_R39.2.0_aarch64.tbz2
++url_rootfs=http://172.17.22.195/tftp/NCG/mic/jp7.2/Tegra_Linux_Sample-Root-Filesystem_R39.2.0_aarch64.tbz2
+ file_rootfs=rootfs.tbz2
+ 
+-url_source=https://developer.nvidia.com/downloads/embedded/L4T/r39_Release_v2.0/sources/public_sources.tbz2
++url_source=http://172.17.22.195/tftp/NCG/mic/jp7.2/public_sources.tbz2
+ file_source=source.tbz2
+ 
+ path_kernel=Linux_for_Tegra/source

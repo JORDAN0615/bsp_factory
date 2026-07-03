@@ -1,0 +1,19 @@
+commit b640fe148a1b7fdbec891d5fd2bc533275e1682e
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Tue Jan 20 15:09:39 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Tue Jan 20 15:09:39 2026 +0800
+
+    Update gitignore.
+
+diff --git a/.gitignore b/.gitignore
+index 0ffae1d..05c676e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,5 +3,6 @@
+ /download/
+ /framework/
+ /package/
++/prbs_test/
+ *.swp
+ *.swo

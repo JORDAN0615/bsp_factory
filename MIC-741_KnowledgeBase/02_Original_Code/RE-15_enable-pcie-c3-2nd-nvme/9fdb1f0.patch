@@ -1,0 +1,24 @@
+commit 9fdb1f0cd2d960fd8d9619d9d15cccac1679bbd7
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Mon Jun 22 11:02:03 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Mon Jun 22 11:02:03 2026 +0800
+
+    fix(mic-741): enable PCIe-C3 (2nd NVMe) via ODMDATA uphy0-config-6
+
+diff --git a/source/modify/driver/p3834-0008-p4071-0000-nvme.conf b/source/modify/driver/p3834-0008-p4071-0000-nvme.conf
+index 981f5d8..295c661 100644
+--- a/source/modify/driver/p3834-0008-p4071-0000-nvme.conf
++++ b/source/modify/driver/p3834-0008-p4071-0000-nvme.conf
+@@ -69,6 +69,11 @@ OVERLAY_DTB_FILE+=",tegra264-p4071-0000+p3834-xxxx-dynamic.dtbo";
+ # If the carrier board is designed without an EEPROM
+ SKIP_EEPROM_CHECK=1
+ 
++# === ODMDATA: PCIe / UPHY overrides ===
++# NOTE: only the LAST active ODMDATA line takes effect (shell reassignment).
++#       To enable several at once, merge the tokens into ONE comma-separated line.
++# Enable PCIe-C3 x2 RP (UPHY0 lane6-7) for 2nd NVMe
++ODMDATA="uphy0-config-6,pcie@3_status=okay";
+ # Uncomment below line to enable C4 RP controller in SRIS mode
+ #ODMDATA="pcie@4_clk-scheme=1"
+ # Uncomment below line to enable C4 controller in Endpoint SRIS mode.

@@ -9,3 +9,10 @@ __pycache__/
 agent/tools_copy/
 runs/*
 !runs/.gitkeep
+.cache/
+_qdrant/
+
+# KB: large binary / auto-generated (rebuild with etl scripts)
+MIC-741_KnowledgeBase/material/
+MIC-741_KnowledgeBase/corpus/
+MIC-741_KnowledgeBase/_raw/

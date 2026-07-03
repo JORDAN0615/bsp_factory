@@ -1,0 +1,39 @@
+commit 84f433e6c6df84ff91de54a274c153630793edff
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Wed Feb 4 14:21:45 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Wed Feb 4 14:21:45 2026 +0800
+
+    Forked from JetPack 7.0
+
+diff --git a/source/config/config.mk b/source/config/config.mk
+index e6deaab..d5cbf02 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -1,11 +1,11 @@
+-url_driver=https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.1/release/Jetson_Linux_R38.2.1_aarch64.tbz2
++url_driver=https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v4.0/release/Jetson_Linux_R38.4.0_aarch64.tbz2
+ folder_driver=Linux_for_Tegra
+ file_driver=sdk.tbz2
+ 
+-url_rootfs=https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.1/release/Tegra_Linux_Sample-Root-Filesystem_R38.2.1_aarch64.tbz2
++url_rootfs=https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v4.0/release/Tegra_Linux_Sample-Root-Filesystem_R38.4.0_aarch64.tbz2
+ file_rootfs=rootfs.tbz2
+ 
+-url_source=https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.1/sources/public_sources.tbz2
++url_source=https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v4.0/source/public_sources.tbz2
+ file_source=source.tbz2
+ 
+ path_kernel=Linux_for_Tegra/source
+@@ -96,9 +96,9 @@ som_fuse_level=fuselevel_production
+ 
+ bsp_board=MIC-741
+ bsp_som=Thor
+-bsp_jetpack=7.0
++bsp_jetpack=7.1
+ bsp_jetpack_step=
+-bsp_version=V1.0.3
++bsp_version=V1.0.0
+ bsp_version_path=/opt
+ 
+ pchain_git=git@172.17.4.45:isystem-esg-linux-bsp/patch_package_list.git

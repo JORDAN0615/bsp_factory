@@ -1,0 +1,169 @@
+commit d0eeee75af1ecaf25cf3a373c6c9a741e96ba9b3
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Mon Jun 22 16:05:58 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Mon Jun 22 16:05:58 2026 +0800
+
+    fix(pinmux): restore I2C3/I2C9/CAN2/CAN3 pins reset to rsvd on JP7.2
+    
+    JP7.2 pinmux (xlsm Rev.9->Rev.14) reset these pins to rsvd1 while the
+    controllers stay enabled in DT, causing bus timeouts (e.g. i2cset bus 3
+    "Write failed"). Restore to JP7.1 functions in the MB1 BCT pinmux.
+
+diff --git a/source/config/config.mk b/source/config/config.mk
+index 4ac6783..75422da 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -33,7 +33,7 @@ config_flash_xml=empty
+ config_kernel_defconfig=defconfig
+ config_kernel_local_version=-1021-tegra
+ config_kernel_arch=arm64
+-config_kernel_build_type=build_jetpack_7_v2
++config_kernel_build_type=build_jetpack_7_v3
+ config_kernel_copy_dtb=dtb_all_v2
+ config_kernel_nv_display=nvgpu/drivers/gpu/nvgpu/nvgpu.ko
+ config_kernel_install_module=modules_all_jetpack_7_v2
+@@ -105,4 +105,4 @@ pchain_git=git@172.17.4.45:isystem-esg-linux-bsp/patch_package_list.git
+ 
+ framework_git=git@172.17.4.45:isystem-esg-linux-bsp/framework_ria.git
+ framework_branch=master
+-framework_commit=019b526e
++framework_commit=5ce86eed
+diff --git a/source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi b/source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi
+index e9679bf..ae49f09 100644
+--- a/source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi
++++ b/source/modify/driver/bootloader/tegra264-mb1-bct-pinmux-p3834-xxxx-p4071-0000.dtsi
+@@ -1318,25 +1318,26 @@ pinmux@ac281000 {
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+ 
++			/* ADV: restore I2C3 (bus 3, c610000) SCL/SDA - JP7.2 Rev.14 pinmux reset these to rsvd1 */
+ 			gen3_i2c_scl_pcc2 {
+ 				nvidia,pins = "gen3_i2c_scl_pcc2";
+-				nvidia,function = "rsvd1";
+-				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+-				nvidia,tristate = <TEGRA_PIN_ENABLE>;
+-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
++				nvidia,function = "i2c3_clk";
++				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
++				nvidia,tristate = <TEGRA_PIN_DISABLE>;
++				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_1X_DRIVER>;
+-				nvidia,e-io-od = <TEGRA_PIN_DISABLE>;
++				nvidia,e-io-od = <TEGRA_PIN_ENABLE>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+ 
+ 			gen3_i2c_sda_pcc3 {
+ 				nvidia,pins = "gen3_i2c_sda_pcc3";
+-				nvidia,function = "rsvd1";
+-				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+-				nvidia,tristate = <TEGRA_PIN_ENABLE>;
+-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
++				nvidia,function = "i2c3_dat";
++				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
++				nvidia,tristate = <TEGRA_PIN_DISABLE>;
++				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_1X_DRIVER>;
+-				nvidia,e-io-od = <TEGRA_PIN_DISABLE>;
++				nvidia,e-io-od = <TEGRA_PIN_ENABLE>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+ 
+@@ -1968,11 +1969,12 @@ pinmux@ac281000 {
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+ 
++			/* ADV: restore native CAN2 (mttcan) - JP7.2 Rev.14 pinmux reset these to rsvd1 */
+ 			can2_dout_pad0 {
+ 				nvidia,pins = "can2_dout_pad0";
+-				nvidia,function = "rsvd1";
+-				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+-				nvidia,tristate = <TEGRA_PIN_ENABLE>;
++				nvidia,function = "can2_dout";
++				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
++				nvidia,tristate = <TEGRA_PIN_DISABLE>;
+ 				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_DEFAULT_DRIVE_1X>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+@@ -1980,10 +1982,10 @@ pinmux@ac281000 {
+ 
+ 			can2_din_pad1 {
+ 				nvidia,pins = "can2_din_pad1";
+-				nvidia,function = "rsvd1";
+-				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
++				nvidia,function = "can2_din";
++				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+ 				nvidia,tristate = <TEGRA_PIN_ENABLE>;
+-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
++				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_DEFAULT_DRIVE_1X>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+@@ -2018,11 +2020,12 @@ pinmux@ac281000 {
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+ 
++			/* ADV: restore native CAN3 (mttcan) - JP7.2 Rev.14 pinmux reset these to rsvd1 */
+ 			can3_dout_pae0 {
+ 				nvidia,pins = "can3_dout_pae0";
+-				nvidia,function = "rsvd1";
+-				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+-				nvidia,tristate = <TEGRA_PIN_ENABLE>;
++				nvidia,function = "can3_dout";
++				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
++				nvidia,tristate = <TEGRA_PIN_DISABLE>;
+ 				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_DEFAULT_DRIVE_1X>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+@@ -2030,10 +2033,10 @@ pinmux@ac281000 {
+ 
+ 			can3_din_pae1 {
+ 				nvidia,pins = "can3_din_pae1";
+-				nvidia,function = "rsvd1";
+-				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
++				nvidia,function = "can3_din";
++				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+ 				nvidia,tristate = <TEGRA_PIN_ENABLE>;
+-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
++				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_DEFAULT_DRIVE_1X>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+@@ -2090,25 +2093,26 @@ pinmux@ac281000 {
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+ 
++			/* ADV: restore I2C9 (bus 9, 810c6a0000) SCL/SDA - JP7.2 Rev.14 pinmux reset these to rsvd1 */
+ 			gen9_i2c_scl_pg3 {
+ 				nvidia,pins = "gen9_i2c_scl_pg3";
+-				nvidia,function = "rsvd1";
+-				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+-				nvidia,tristate = <TEGRA_PIN_ENABLE>;
+-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
++				nvidia,function = "i2c9_clk";
++				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
++				nvidia,tristate = <TEGRA_PIN_DISABLE>;
++				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_1X_DRIVER>;
+-				nvidia,e-io-od = <TEGRA_PIN_DISABLE>;
++				nvidia,e-io-od = <TEGRA_PIN_ENABLE>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+ 
+ 			gen9_i2c_sda_pg4 {
+ 				nvidia,pins = "gen9_i2c_sda_pg4";
+-				nvidia,function = "rsvd1";
+-				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+-				nvidia,tristate = <TEGRA_PIN_ENABLE>;
+-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
++				nvidia,function = "i2c9_dat";
++				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
++				nvidia,tristate = <TEGRA_PIN_DISABLE>;
++				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+ 				nvidia,drv-type = <TEGRA_PIN_1X_DRIVER>;
+-				nvidia,e-io-od = <TEGRA_PIN_DISABLE>;
++				nvidia,e-io-od = <TEGRA_PIN_ENABLE>;
+ 				nvidia,e-lpbk = <TEGRA_PIN_DISABLE>;
+ 			};
+ 

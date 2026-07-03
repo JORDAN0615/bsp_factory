@@ -61,11 +61,13 @@ class RepairGraphState(TypedDict, total=False):
     no_patch_route: str
     review_agent_route: str
     review_route: str
+    rag_context: str           # BSP KB answer injected into patch_agent prompt
 
 
 def build_repair_graph(checkpointer=None):
     graph = StateGraph(RepairGraphState)
     graph.add_node("classify_error", classify_error_node)
+    graph.add_node("rag_context", rag_context_node)
     graph.add_node("select_skills", select_skills_node)
     graph.add_node("load_skill", load_skill_node)
     graph.add_node("inspect_repo", inspect_repo_node)
@@ -78,7 +80,8 @@ def build_repair_graph(checkpointer=None):
     graph.add_node("publish", publish_node)
 
     graph.add_edge(START, "classify_error")
-    graph.add_edge("classify_error", "select_skills")
+    graph.add_edge("classify_error", "rag_context")
+    graph.add_edge("rag_context", "select_skills")
     graph.add_edge("select_skills", "load_skill")
     graph.add_edge("load_skill", "inspect_repo")
     graph.add_edge("inspect_repo", "patch_agent")
@@ -176,6 +179,35 @@ def resume_review_graph(
     if result and "state" in result:
         return result["state"]
     return BSPAgentState.load(state.run_dir)
+
+
+def rag_context_node(graph_state: RepairGraphState) -> RepairGraphState:
+    """Query the BSP knowledge base and attach the result to graph state.
+
+    Runs after classify_error so error_signatures are available to enrich retrieval.
+    The result is passed to patch_agent as additional prompt context.
+    """
+    state = graph_state["state"]
+    attempt = state.current_attempt
+    try:
+        from rag_integration import query_rag
+        result = query_rag(
+            issue=state.issue,
+            error_signatures=attempt.error_signatures or [],
+        )
+        source_label = "（知識庫）" if result["source"] == "kb" else "（LLM 推斷，知識庫無記錄）"
+        rag_context = (
+            f"## BSP Knowledge Base Context {source_label}\n\n"
+            f"{result['answer']}\n"
+        )
+        if result["citations"]:
+            rag_context += "\n**來源：** " + ", ".join(result["citations"]) + "\n"
+        from agent.nodes.workflow import _attempt_dir
+        from agent.tools.artifact_tools import write_text
+        write_text(_attempt_dir(state) / "debug" / "rag_context.md", rag_context)
+    except Exception as exc:
+        rag_context = f"<!-- RAG unavailable: {exc} -->"
+    return {"rag_context": rag_context}
 
 
 def classify_error_node(graph_state: RepairGraphState) -> RepairGraphState:
@@ -338,6 +370,7 @@ def patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
         skill_text,
         repo_inspection,
         settings,
+        rag_context=graph_state.get("rag_context", ""),
     )
     _save_state(state)
     return {

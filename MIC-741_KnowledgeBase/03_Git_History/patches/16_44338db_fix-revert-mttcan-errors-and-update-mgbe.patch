@@ -1,0 +1,328 @@
+commit 44338db8e823b01948b144ae45988da486eebfe1
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Mon Mar 9 11:22:34 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Mon Mar 9 11:22:34 2026 +0800
+
+    Fix: revert mttcan errors and update mgbe3 shutdown configuration
+
+diff --git a/source/config/config.mk b/source/config/config.mk
+index d5cbf02..af830f3 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -105,4 +105,4 @@ pchain_git=git@172.17.4.45:isystem-esg-linux-bsp/patch_package_list.git
+ 
+ framework_git=git@172.17.4.45:isystem-esg-linux-bsp/framework_ria.git
+ framework_branch=master
+-framework_commit=3fee2719
++framework_commit=33c32d52
+diff --git a/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000+p3834-0008-nv.dts b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000+p3834-0008-nv.dts
+new file mode 100644
+index 0000000..3e3bc1a
+--- /dev/null
++++ b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000+p3834-0008-nv.dts
+@@ -0,0 +1,105 @@
++// SPDX-License-Identifier: GPL-2.0-only
++// SPDX-FileCopyrightText: Copyright (c) 2024-2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
++/dts-v1/;
++
++#include "tegra264-p3834-0008.dtsi"
++#include "tegra264-p4071-0000.dtsi"
++
++/ {
++	model = "NVIDIA Jetson AGX Thor Developer Kit";
++	compatible = "nvidia,p4071-0000+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
++
++	bus@0 {
++		mttcan@81102f0000 {
++			status = "okay";
++		};
++
++		mttcan@8110300000 {
++			status = "okay";
++		};
++
++		mttcan@8110330000 {
++			status = "okay";
++                };
++
++		mttcan@8110340000 {
++			status = "okay";
++		};
++
++		mgbe0: ethernet@a808a10000 {
++			status = "okay";
++		};
++
++		mgbe1: ethernet@a808b10000 {
++			status = "okay";
++		};
++
++		mgbe2: ethernet@a808d10000 {
++			status = "okay";
++		};
++
++		mgbe3: ethernet@a808e10000 {
++			status = "disabled";
++		};
++	};
++
++	pwm-fan {
++		cooling-levels = <77 102 140 192 255>;
++	};
++
++	thermal-shutdown-alert {
++		status = "disabled";
++	};
++
++	thermal-zones {
++		tj-thermal {
++			trips {
++				tj_trip_active0: active-0 {
++					temperature = <80000>;
++					hysteresis = <0>;
++					type = "active";
++				};
++
++				tj_trip_active1: active-1 {
++					temperature = <86000>;
++					hysteresis = <0>;
++					type = "active";
++				};
++
++				tj_trip_active2: active-2 {
++					temperature = <91000>;
++					hysteresis = <0>;
++					type = "active";
++				};
++
++				tj_trip_active3: active-3 {
++					temperature = <100000>;
++					hysteresis = <0>;
++					type = "active";
++				};
++			};
++
++			cooling-maps {
++				map-active-0 {
++					cooling-device = <&soc_fan 0 1>;
++					trip = <&tj_trip_active0>;
++				};
++
++				map-active-1 {
++					cooling-device = <&soc_fan 1 2>;
++					trip = <&tj_trip_active1>;
++				};
++
++				map-active-2 {
++					cooling-device = <&soc_fan 2 3>;
++					trip = <&tj_trip_active2>;
++				};
++
++				map-active-3 {
++					cooling-device = <&soc_fan 3 4>;
++					trip = <&tj_trip_active3>;
++				};
++			};
++		};
++	};
++};
+diff --git a/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi
+index 49a3dd1..639b55d 100644
+--- a/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi
++++ b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000.dtsi
+@@ -359,7 +359,6 @@
+ 
+ 		/* MGBE 3 */
+ 	        mgbe3: ethernet@a808e10000 {
+-			status = "disabled";
+ 			nvidia,mac-addr-idx = <4>;
+ 			nvidia,uphy-gbe-mode = <1>;
+ 			nvidia,phy-iface-mode = <0x0>;
+diff --git a/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts b/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts
+deleted file mode 100644
+index c8a4903..0000000
+--- a/source/modify/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts
++++ /dev/null
+@@ -1,32 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-// SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+-/dts-v1/;
+-
+-#include "tegra264-p4071-0000+p3834-0008-nv.dts"
+-
+-/ {
+-	model = "NVIDIA Jetson AGX Thor Developer Kit";
+-	compatible = "nvidia,p4071-0008+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
+-
+-	bus@0 {
+-		mttcan@81102f0000 {
+-			status = "okay";
+-		};
+-
+-		mttcan@8110300000 {
+-			status = "okay";
+-		};
+-
+-		mttcan@8110330000 {
+-			status = "okay";
+-		};
+-
+-		mttcan@8110340000 {
+-			status = "okay";
+-		};
+-	};
+-
+-	ufshci@a80b8d0000 {
+-		status = "okay";
+-	};
+-};
+diff --git a/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000+p3834-0008-nv.dts b/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000+p3834-0008-nv.dts
+new file mode 100644
+index 0000000..75d8919
+--- /dev/null
++++ b/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0000+p3834-0008-nv.dts
+@@ -0,0 +1,105 @@
++// SPDX-License-Identifier: GPL-2.0-only
++// SPDX-FileCopyrightText: Copyright (c) 2024-2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
++/dts-v1/;
++
++#include "tegra264-p3834-0008.dtsi"
++#include "tegra264-p4071-0000.dtsi"
++
++/ {
++	model = "NVIDIA Jetson AGX Thor Developer Kit";
++	compatible = "nvidia,p4071-0000+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
++
++	bus@0 {
++		mttcan@81102f0000 {
++			status = "okay";
++		};
++
++		mttcan@8110300000 {
++			status = "okay";
++		};
++
++		mttcan@8110330000 {
++			status = "okay";
++                };
++
++		mttcan@8110340000 {
++			status = "okay";
++		};
++
++		mgbe0: ethernet@a808a10000 {
++			status = "okay";
++		};
++
++		mgbe1: ethernet@a808b10000 {
++			status = "okay";
++		};
++
++		mgbe2: ethernet@a808d10000 {
++			status = "okay";
++		};
++
++		mgbe3: ethernet@a808e10000 {
++			status = "okay";
++		};
++	};
++
++	pwm-fan {
++		cooling-levels = <77 102 140 192 255>;
++	};
++
++	thermal-shutdown-alert {
++		status = "disabled";
++	};
++
++	thermal-zones {
++		tj-thermal {
++			trips {
++				tj_trip_active0: active-0 {
++					temperature = <80000>;
++					hysteresis = <0>;
++					type = "active";
++				};
++
++				tj_trip_active1: active-1 {
++					temperature = <86000>;
++					hysteresis = <0>;
++					type = "active";
++				};
++
++				tj_trip_active2: active-2 {
++					temperature = <91000>;
++					hysteresis = <0>;
++					type = "active";
++				};
++
++				tj_trip_active3: active-3 {
++					temperature = <100000>;
++					hysteresis = <0>;
++					type = "active";
++				};
++			};
++
++			cooling-maps {
++				map-active-0 {
++					cooling-device = <&soc_fan 0 1>;
++					trip = <&tj_trip_active0>;
++				};
++
++				map-active-1 {
++					cooling-device = <&soc_fan 1 2>;
++					trip = <&tj_trip_active1>;
++				};
++
++				map-active-2 {
++					cooling-device = <&soc_fan 2 3>;
++					trip = <&tj_trip_active2>;
++				};
++
++				map-active-3 {
++					cooling-device = <&soc_fan 3 4>;
++					trip = <&tj_trip_active3>;
++				};
++			};
++		};
++	};
++};
+diff --git a/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts b/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts
+deleted file mode 100644
+index fe8365f..0000000
+--- a/source/raw/kernel/hardware/nvidia/t264/nv-public/nv-platform/tegra264-p4071-0008+p3834-0008-nv.dts
++++ /dev/null
+@@ -1,32 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-// SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+-/dts-v1/;
+-
+-#include "tegra264-p4071-0000+p3834-0008-nv.dts"
+-
+-/ {
+-	model = "NVIDIA Jetson AGX Thor Developer Kit";
+-	compatible = "nvidia,p4071-0008+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
+-
+-	bus@0 {
+-		mttcan@81102f0000 {
+-			status = "disabled";
+-		};
+-
+-		mttcan@8110300000 {
+-			status = "disabled";
+-		};
+-
+-		mttcan@8110330000 {
+-			status = "disabled";
+-		};
+-
+-		mttcan@8110340000 {
+-			status = "disabled";
+-		};
+-	};
+-
+-	ufshci@a80b8d0000 {
+-		status = "okay";
+-	};
+-};

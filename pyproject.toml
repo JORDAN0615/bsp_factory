@@ -24,6 +24,15 @@ dependencies = [
   "rich>=13.0.0",
   "typer>=0.12.0",
   "uvicorn[standard]>=0.29.0",
+  # RAG dependencies
+  "torch>=2.4.0",
+  "qdrant-client>=1.8.0",
+  "rank-bm25>=0.2.0",
+  "sentence-transformers>=3.0.0",
+  "psycopg2-binary>=2.9.0",
+  "neo4j>=5.0.0",
+  "pdfplumber>=0.11.0",
+  "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +47,15 @@ dev = [
 bsp-agent = "agent.main:app"
 
 [tool.setuptools.packages.find]
-include = ["agent*"]
+include = ["agent*", "rag*", "db*"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,21 @@
+commit 81eb09d349433477e04a163b402dfc6469e54a5e
+Author:     Alex Hsu <alex.hsu@advantech.com>
+AuthorDate: Fri Jun 26 10:55:55 2026 +0800
+Commit:     Alex Hsu <alex.hsu@advantech.com>
+CommitDate: Fri Jun 26 10:55:55 2026 +0800
+
+    chore(release): bump version to V1.0.2
+
+diff --git a/source/config/config.mk b/source/config/config.mk
+index bfdd6f0..b7eb65f 100644
+--- a/source/config/config.mk
++++ b/source/config/config.mk
+@@ -99,7 +99,7 @@ bsp_som ?= T5000
+ include source/config/som/$(shell echo $(bsp_som) | tr A-Z a-z).mk
+ bsp_jetpack=7.2
+ bsp_jetpack_step=
+-bsp_version=V1.0.1
++bsp_version=V1.0.2
+ bsp_version_path=/opt
+ 
+ pchain_git=git@172.17.4.45:isystem-esg-linux-bsp/patch_package_list.git

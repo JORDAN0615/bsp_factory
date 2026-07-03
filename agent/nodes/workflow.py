@@ -383,6 +383,7 @@ def _propose_patch(
     skill_text: str,
     repo_inspection: str,
     settings: Settings,
+    rag_context: str = "",
 ) -> tuple[str, str | None]:
     system_prompt = (
         "You are a conservative Jetson BSP patch generator. Output search/replace "
@@ -396,6 +397,7 @@ def _propose_patch(
         f"Suspected areas: {attempt.suspected_areas}\n\n"
         f"Retry context (previous attempts in this run):\n{build_retry_context(state)[:8000]}\n\n"
         f"Previous review feedback:\n{_review_feedback_context(state)}\n\n"
+        f"BSP Knowledge Base (RAG retrieval):\n{rag_context[:8000]}\n\n"
         f"Retrieved skills:\n{skill_text[:20000]}\n\n"
         f"Repo inspection:\n{repo_inspection[:40000]}\n"
         "\nEdit block format:\n"

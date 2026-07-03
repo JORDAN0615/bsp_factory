@@ -1,0 +1,53 @@
+﻿commit d867c08e454439c49530fd1db7bb6567e83ad326
+Author: Alex Hsu <alex.hsu@advantech.com>
+Date:   Thu Jan 15 15:36:54 2026 +0800
+
+    Walk around nvpmodel issues for MGBE unlink.
+
+diff --git a/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh b/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
+index 3e13557..4f2eb1c 100755
+--- a/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
++++ b/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
+@@ -49,35 +49,23 @@ init_pinmux_gpio () {
+ 	busybox devmem 0x810c286018 w 0x51
+ }
+ 
+-fix_network () {
+-	NETPLAN_FILE="/etc/netplan/01-network-manager-all.yaml"
+-	
+-	if [ -f "$NETPLAN_FILE" ]; then
+-		CURRENT_PERM=$(stat -c %a "$NETPLAN_FILE")
+-		if [ "$CURRENT_PERM" != "600" ]; then
+-			echo "BSP_INIT: Fixing Netplan permissions (Found $CURRENT_PERM, setting to 600)..." > /dev/kmsg
+-			chmod 600 "$NETPLAN_FILE"
+-			netplan apply
+-			ip link set mgbe0_0 up
+-			ip link set mgbe1_0 up
+-			echo "BSP_INIT: Network interface force UP completed." > /dev/kmsg
+-		fi
+-	fi
+-}
+-
+ fix_nvpmodel () {
+ 	sleep 5
++	echo "BSP_INIT: Restarting NVPModel for Display fix..." > /dev/kmsg
+ 	systemctl restart nvpmodel
+-	echo "BSP_INIT: NVPModel restarted." > /dev/kmsg
++	sleep 2
++	echo "BSP_INIT: Performing Final Network Resurrection..." > /dev/kmsg
++	ip link set mgbe0_0 up		# MGBE0 (LAN)
++	ip link set mgbe1_0 up		# MGBE1 (LAN)
++	ip link set mgbe2_0 up		# MGBE2 (SFP)
++	echo "BSP_INIT: All delayed tasks completed. System is stable." > /dev/kmsg
+ }
+ 
+ start () {
+ 	echo "BSP_INIT: Script started." > /dev/kmsg
+-	fix_network
+ 	enable_audio
+ 	init_pinmux_gpio
+ 	fix_nvpmodel &
+-	echo "BSP_INIT: Script finished." > /dev/kmsg
+ }
+ 
+ $1 "${@:2}"

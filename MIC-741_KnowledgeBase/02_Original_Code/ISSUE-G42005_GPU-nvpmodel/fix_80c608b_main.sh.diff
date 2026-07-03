@@ -1,0 +1,52 @@
+﻿commit 80c608b4a1c344984365ea6c7fa004172fed3d03
+Author: Alex Hsu <alex.hsu@advantech.com>
+Date:   Tue Jan 13 15:22:30 2026 +0800
+
+    BSP v1.0.2: Resolve 10G Aquantia PHY, power LED, SPI bus and nvpmodel issues.
+
+diff --git a/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh b/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
+index 0a30065..3e13557 100755
+--- a/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
++++ b/source/modify/driver/rootfs/opt/advantech/service/bsp_init/main.sh
+@@ -1,3 +1,5 @@
++#!/bin/bash
++
+ check_audio () {
+ 	while true
+ 	do
+@@ -47,9 +49,35 @@ init_pinmux_gpio () {
+ 	busybox devmem 0x810c286018 w 0x51
+ }
+ 
++fix_network () {
++	NETPLAN_FILE="/etc/netplan/01-network-manager-all.yaml"
++	
++	if [ -f "$NETPLAN_FILE" ]; then
++		CURRENT_PERM=$(stat -c %a "$NETPLAN_FILE")
++		if [ "$CURRENT_PERM" != "600" ]; then
++			echo "BSP_INIT: Fixing Netplan permissions (Found $CURRENT_PERM, setting to 600)..." > /dev/kmsg
++			chmod 600 "$NETPLAN_FILE"
++			netplan apply
++			ip link set mgbe0_0 up
++			ip link set mgbe1_0 up
++			echo "BSP_INIT: Network interface force UP completed." > /dev/kmsg
++		fi
++	fi
++}
++
++fix_nvpmodel () {
++	sleep 5
++	systemctl restart nvpmodel
++	echo "BSP_INIT: NVPModel restarted." > /dev/kmsg
++}
++
+ start () {
++	echo "BSP_INIT: Script started." > /dev/kmsg
++	fix_network
+ 	enable_audio
+ 	init_pinmux_gpio
++	fix_nvpmodel &
++	echo "BSP_INIT: Script finished." > /dev/kmsg
+ }
+ 
+ $1 "${@:2}"
