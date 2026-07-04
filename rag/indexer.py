@@ -6,9 +6,36 @@ from rag.embedding import embed_batch
 from rag.loader import load_chunks
 from rag.models import Chunk
 from rag.vector_store import COLLECTION, client, init_collection
-from rag.cache import load_index_from_cache, save_index_to_cache
+from rag.cache import (
+    load_index_from_cache,
+    save_index_to_cache,
+    ingestion_done_for,
+    mark_ingestion_done,
+)
 
 from qdrant_client.models import PointStruct
+
+
+def _ensure_db_ingested(kb_dir: Path) -> None:
+    """Push KB issue records into PostgreSQL + Neo4j (once per KB version).
+
+    Uses a checksum sentinel so ingestion only re-runs when KB content changes,
+    not on every agent startup. Safe to call from both fast and slow paths.
+    """
+    if ingestion_done_for(kb_dir):
+        return
+    try:
+        from db.postgres import is_available as pg_ok
+        from db.neo4j_client import is_available as neo4j_ok
+        from db.ingestion import run_ingestion
+        _pg, _neo = pg_ok(), neo4j_ok()
+        if not _pg and not _neo:
+            return
+        print(f"[DB] Ingesting KB → PostgreSQL={'✓' if _pg else '✗'}  Neo4j={'✓' if _neo else '✗'}")
+        run_ingestion(_pg, _neo)
+        mark_ingestion_done(kb_dir)
+    except Exception as exc:
+        print(f"[DB] Ingestion skipped: {exc}")
 
 
 def build_index(*, force: bool = False) -> list[Chunk]:
@@ -40,6 +67,7 @@ def build_index(*, force: bool = False) -> list[Chunk]:
             existing = client.count(collection_name=COLLECTION).count
             if existing == len(chunks):
                 print(f"[FAST] Restored {len(chunks)} chunks from cache (skipped embedding + upsert)")
+                _ensure_db_ingested(kb_dir)
                 return chunks
         except Exception:
             pass
@@ -67,6 +95,7 @@ def build_index(*, force: bool = False) -> list[Chunk]:
             ]
             client.upsert(collection_name=COLLECTION, points=points)
             print(f"[FAST] Restored {len(chunks)} chunks from cache (skipped embedding)")
+            _ensure_db_ingested(kb_dir)
             return chunks
         else:
             print("[WARN] Cache vector count mismatch, rebuilding...")
@@ -117,17 +146,8 @@ def build_index(*, force: bool = False) -> list[Chunk]:
     # Save to cache for next startup
     save_index_to_cache(chunks, vectors, kb_dir)
 
-    # Ingest structured data into PostgreSQL + Neo4j (if available)
-    try:
-        from db.postgres import is_available as pg_ok
-        from db.neo4j_client import is_available as neo4j_ok
-        from db.ingestion import run_ingestion
-        _pg, _neo = pg_ok(), neo4j_ok()
-        if _pg or _neo:
-            print(f"[DB] Ingesting KB → PostgreSQL={'✓' if _pg else '✗'} Neo4j={'✓' if _neo else '✗'}")
-            run_ingestion(_pg, _neo)
-    except Exception as exc:
-        print(f"[DB] Ingestion skipped: {exc}")
+    # Ingest structured data into PostgreSQL + Neo4j
+    _ensure_db_ingested(kb_dir)
 
     print(f"[OK] Indexed {len(points)} chunks (BM25 + Vector)")
     return chunks

@@ -22,6 +22,7 @@ from pathlib import Path
 CACHE_VERSION = 1
 CACHE_DIR = Path(__file__).parent.parent / ".cache"
 CACHE_FILE = CACHE_DIR / "index_v1.pkl"
+INGESTION_SENTINEL = CACHE_DIR / "ingestion_v1.json"
 
 
 # -- checksum helpers -------------------------------------------------
@@ -111,6 +112,31 @@ def refresh_checksum(kb_dir: Path) -> bool:
     except Exception as e:
         print(f"[WARN] refresh_checksum failed: {e}")
         return False
+
+
+def ingestion_done_for(kb_dir: Path) -> bool:
+    """Return True if DB ingestion was already completed for this KB checksum."""
+    if not INGESTION_SENTINEL.is_file():
+        return False
+    try:
+        import json
+        data = json.loads(INGESTION_SENTINEL.read_text(encoding="utf-8"))
+        return data.get("checksum") == _data_checksum(kb_dir)
+    except Exception:
+        return False
+
+
+def mark_ingestion_done(kb_dir: Path) -> None:
+    """Write sentinel so next startup skips re-ingestion for unchanged KB."""
+    import json
+    CACHE_DIR.mkdir(exist_ok=True)
+    try:
+        INGESTION_SENTINEL.write_text(
+            json.dumps({"checksum": _data_checksum(kb_dir)}),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"[WARN] Failed to save ingestion sentinel: {e}")
 
 
 def load_index_from_cache() -> dict | None:
