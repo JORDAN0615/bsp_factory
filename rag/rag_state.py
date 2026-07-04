@@ -10,8 +10,8 @@ from rag.models import Chunk
 class AgentState(TypedDict, total=False):
     # ── Block A: input ────────────────────────────────────────────
     original_input: str
-    route: Literal["chat", "kb"]
-    query_object: dict           # {semantic_query, filters, keywords, graph_hints}
+    route: Literal["chat", "kb"]   # "kb" when called from agent; "chat" for standalone
+    query_object: dict             # {semantic_query, filters, keywords, graph_hints}
 
     # ── Block B/C: retrieval ──────────────────────────────────────
     candidates: list[Chunk]
@@ -33,6 +33,12 @@ class AgentState(TypedDict, total=False):
 
     # ── Gap report ────────────────────────────────────────────────
     gap_report: dict
+
+    # ── Subgraph output (merged back to RepairGraphState) ─────────
+    # Formatted KB answer injected into patch_agent prompt.
+    # Key name matches RepairGraphState.rag_context so LangGraph
+    # merges it automatically when RAG runs as a subgraph node.
+    rag_context: str
 
 
 BSPState = AgentState

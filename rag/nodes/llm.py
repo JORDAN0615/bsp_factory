@@ -114,9 +114,18 @@ def _parse_kb_answer(raw: str) -> tuple[str, list[str]]:
     return raw, []
 
 
+def _format_rag_context(answer: str, citations: list[str], is_gap: bool) -> str:
+    """Format the LLM answer into the rag_context block injected into patch_agent."""
+    source_label = "（LLM 推斷，知識庫無記錄）" if is_gap else "（知識庫）"
+    text = f"## BSP Knowledge Base Context {source_label}\n\n{answer}\n"
+    if citations:
+        text += "\n**來源：** " + ", ".join(citations) + "\n"
+    return text
+
+
 def llm_node(state: AgentState) -> dict:
     original_input = state.get("original_input", "")
-    route = state.get("route", "kb")
+    route = state.get("route") or "kb"
     verify_status = state.get("verify_status", "")
 
     try:
@@ -126,18 +135,19 @@ def llm_node(state: AgentState) -> dict:
             temperature=0,
         )
     except Exception as e:
-        return {"llm_answer": f"LLM 初始化失敗: {e}", "citations": []}
+        return {"llm_answer": f"LLM 初始化失敗: {e}", "citations": [], "rag_context": ""}
 
-    # Chat path
+    # Chat path (standalone mode — rag_context not used by agent)
     if route == "chat":
         try:
             result = llm.invoke([
                 {"role": "system", "content": _CHAT_SYSTEM},
                 {"role": "user", "content": original_input},
             ])
-            return {"llm_answer": str(result.content), "citations": []}
+            answer = str(result.content)
         except Exception as e:
-            return {"llm_answer": f"LLM 呼叫失敗: {e}", "citations": []}
+            answer = f"LLM 呼叫失敗: {e}"
+        return {"llm_answer": answer, "citations": [], "rag_context": ""}
 
     # Gap path: KB exhausted, LLM answers from own knowledge
     if verify_status == "gap":
@@ -165,7 +175,11 @@ def llm_node(state: AgentState) -> dict:
             raw = f"LLM 呼叫失敗: {e}"
         answer, _ = _parse_kb_answer(raw)
         answer = "⚠️ 知識庫無相關記錄，以下為 LLM 根據通用 BSP 知識推斷（未經內部資料驗證）：\n\n" + answer
-        return {"llm_answer": answer, "citations": []}
+        return {
+            "llm_answer": answer,
+            "citations": [],
+            "rag_context": _format_rag_context(answer, [], is_gap=True),
+        }
 
     # KB path: answer from retrieved context
     chunks = state.get("reranked_results", state.get("candidates", []))
@@ -189,5 +203,9 @@ def llm_node(state: AgentState) -> dict:
         raw = f"LLM 呼叫失敗: {e}"
 
     answer, citations = _parse_kb_answer(raw)
-    return {"llm_answer": answer, "citations": citations}
+    return {
+        "llm_answer": answer,
+        "citations": citations,
+        "rag_context": _format_rag_context(answer, citations, is_gap=False),
+    }
 

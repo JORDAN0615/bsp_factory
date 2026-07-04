@@ -62,12 +62,20 @@ class RepairGraphState(TypedDict, total=False):
     review_agent_route: str
     review_route: str
     rag_context: str           # BSP KB answer injected into patch_agent prompt
+    # RAG subgraph bridge fields (overlap with AgentState enables LangGraph state passing)
+    original_input: str        # enriched issue text passed to RAG subgraph
+    route: str                 # always "kb" for repair agent
+    rag_route: str             # routing signal: "run_rag" | "skip_rag"
 
 
 def build_repair_graph(checkpointer=None):
+    from rag.rag_graph import build_rag_graph
+    rag_subgraph = build_rag_graph()
+
     graph = StateGraph(RepairGraphState)
     graph.add_node("classify_error", classify_error_node)
-    graph.add_node("rag_context", rag_context_node)
+    graph.add_node("prepare_rag_input", prepare_rag_input_node)
+    graph.add_node("rag_context", rag_subgraph)   # compiled RAG StateGraph as subgraph node
     graph.add_node("select_skills", select_skills_node)
     graph.add_node("load_skill", load_skill_node)
     graph.add_node("inspect_repo", inspect_repo_node)
@@ -80,7 +88,12 @@ def build_repair_graph(checkpointer=None):
     graph.add_node("publish", publish_node)
 
     graph.add_edge(START, "classify_error")
-    graph.add_edge("classify_error", "rag_context")
+    graph.add_edge("classify_error", "prepare_rag_input")
+    graph.add_conditional_edges(
+        "prepare_rag_input",
+        route_after_prepare_rag,
+        {"rag_context": "rag_context", "select_skills": "select_skills"},
+    )
     graph.add_edge("rag_context", "select_skills")
     graph.add_edge("select_skills", "load_skill")
     graph.add_edge("load_skill", "inspect_repo")
@@ -181,33 +194,45 @@ def resume_review_graph(
     return BSPAgentState.load(state.run_dir)
 
 
-def rag_context_node(graph_state: RepairGraphState) -> RepairGraphState:
-    """Query the BSP knowledge base and attach the result to graph state.
+def prepare_rag_input_node(graph_state: RepairGraphState) -> dict:
+    """Prepare enriched input for the RAG subgraph and ensure the local index is ready.
 
-    Runs after classify_error so error_signatures are available to enrich retrieval.
-    The result is passed to patch_agent as additional prompt context.
+    Sets original_input and route so the compiled RAG subgraph picks them up via
+    LangGraph's overlapping-key state passing. On local index failure, sets rag_context
+    to an error placeholder and routes directly to select_skills (skipping the subgraph).
+    Also clears rag_context from any prior attempt so the subgraph sets a fresh value.
     """
     state = graph_state["state"]
     attempt = state.current_attempt
-    try:
-        from rag_integration import query_rag
-        result = query_rag(
-            issue=state.issue,
-            error_signatures=attempt.error_signatures or [],
-        )
-        source_label = "（知識庫）" if result["source"] == "kb" else "（LLM 推斷，知識庫無記錄）"
-        rag_context = (
-            f"## BSP Knowledge Base Context {source_label}\n\n"
-            f"{result['answer']}\n"
-        )
-        if result["citations"]:
-            rag_context += "\n**來源：** " + ", ".join(result["citations"]) + "\n"
-        from agent.nodes.workflow import _attempt_dir
-        from agent.tools.artifact_tools import write_text
-        write_text(_attempt_dir(state) / "debug" / "rag_context.md", rag_context)
-    except Exception as exc:
-        rag_context = f"<!-- RAG unavailable: {exc} -->"
-    return {"rag_context": rag_context}
+    enriched = state.issue
+    if attempt.error_signatures:
+        enriched += "\n\nError signatures: " + ", ".join(attempt.error_signatures)
+
+    from kb_client import KBClient
+    kb = KBClient()
+    if not kb.available:
+        try:
+            from rag.rag_graph import ensure_local_index
+            ensure_local_index()
+        except Exception as exc:
+            return {
+                "original_input": enriched,
+                "route": "kb",
+                "rag_route": "skip_rag",
+                "rag_context": f"<!-- RAG unavailable: {exc} -->",
+            }
+    return {
+        "original_input": enriched,
+        "route": "kb",
+        "rag_route": "run_rag",
+        "rag_context": "",  # clear stale value from prior attempt
+    }
+
+
+def route_after_prepare_rag(
+    graph_state: RepairGraphState,
+) -> Literal["rag_context", "select_skills"]:
+    return "select_skills" if graph_state.get("rag_route") == "skip_rag" else "rag_context"
 
 
 def classify_error_node(graph_state: RepairGraphState) -> RepairGraphState:
@@ -231,14 +256,19 @@ def select_skills_node(graph_state: RepairGraphState) -> RepairGraphState:
     state = graph_state["state"]
     settings = graph_state["settings"]
     attempt = state.current_attempt
+    from agent.nodes.workflow import _attempt_dir
+    from agent.tools.artifact_tools import read_json
+
+    rag_context = graph_state.get("rag_context", "")
+    if rag_context and not rag_context.startswith("<!--"):
+        write_text(_attempt_dir(state) / "debug" / "rag_context.md", rag_context)
+
     classification = {
         "selected_skills": attempt.selected_skills,
         "bug_type": attempt.bug_type,
         "error_signatures": attempt.error_signatures,
         "suspected_areas": attempt.suspected_areas,
     }
-    from agent.nodes.workflow import _attempt_dir
-    from agent.tools.artifact_tools import read_json
 
     classification_path = _attempt_dir(state) / "debug" / "error_classification.json"
     if classification_path.exists():
