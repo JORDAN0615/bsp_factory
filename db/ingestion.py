@@ -261,6 +261,6 @@ if __name__ == "__main__":
     from db.neo4j_client import is_available as neo4j_ok
     _pg = pg_ok()
     _neo = neo4j_ok()
-    print(f"PostgreSQL: {'✓' if _pg else '✗ (skip)'}  Neo4j: {'✓' if _neo else '✗ (skip)'}")
+    print(f"PostgreSQL: {'OK' if _pg else 'skip'}  Neo4j: {'OK' if _neo else 'skip'}")
     result = run_ingestion(_pg, _neo)
     print(f"\nIngestion complete: {result}")

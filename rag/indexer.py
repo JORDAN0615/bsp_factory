@@ -31,7 +31,7 @@ def _ensure_db_ingested(kb_dir: Path) -> None:
         _pg, _neo = pg_ok(), neo4j_ok()
         if not _pg and not _neo:
             return
-        print(f"[DB] Ingesting KB → PostgreSQL={'✓' if _pg else '✗'}  Neo4j={'✓' if _neo else '✗'}")
+        print(f"[DB] Ingesting KB → PostgreSQL={'OK' if _pg else '--'}  Neo4j={'OK' if _neo else '--'}")
         run_ingestion(_pg, _neo)
         mark_ingestion_done(kb_dir)
     except Exception as exc:
