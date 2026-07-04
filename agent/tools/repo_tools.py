@@ -1,9 +1,42 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
 from agent.tools.path_tools import ensure_existing_file_under, resolve_under
+
+_rg_available: bool | None = None
+
+
+def _has_rg() -> bool:
+    global _rg_available
+    if _rg_available is None:
+        _rg_available = shutil.which("rg") is not None
+    return _rg_available
+
+
+def _grep_python(root: Path, pattern: str, include: str | None) -> list[dict[str, object]]:
+    """Pure-Python fallback for grep_repo when ripgrep is not installed."""
+    glob_pat = include or "*"
+    if glob_pat.startswith("**/"):
+        glob_pat = glob_pat[3:]
+    matches: list[dict[str, object]] = []
+    for path in root.rglob(glob_pat):
+        if not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines, 1):
+            if pattern in line:
+                try:
+                    rel = str(path.relative_to(root))
+                except ValueError:
+                    rel = str(path)
+                matches.append({"file": rel, "line": i, "text": line})
+    return matches
 
 
 def read_text_file(repo_path: str | Path, relative_path: str | Path, max_chars: int = 20000) -> str:
@@ -21,7 +54,12 @@ def write_text_file(repo_path: str | Path, relative_path: str | Path, content: s
 def grep_repo(repo_path: str | Path, pattern: str, include: str | None = None) -> list[dict[str, object]]:
     if "\n" in pattern or not pattern.strip():
         return []
-    cmd = ["rg", "--fixed-strings", "--line-number", "--no-heading", "--", pattern, str(repo_path)]
+    root = Path(repo_path)
+
+    if not _has_rg():
+        return _grep_python(root, pattern, include)
+
+    cmd = ["rg", "--fixed-strings", "--line-number", "--no-heading", "--", pattern, str(root)]
     if include:
         cmd[1:1] = ["--glob", include]
     result = subprocess.run(cmd, text=True, capture_output=True, check=False)
@@ -34,7 +72,7 @@ def grep_repo(repo_path: str | Path, pattern: str, include: str | None = None) -
             continue
         file_path, line_no, text = parts
         try:
-            rel = str(Path(file_path).resolve().relative_to(Path(repo_path).resolve()))
+            rel = str(Path(file_path).resolve().relative_to(root.resolve()))
         except ValueError:
             rel = file_path
         matches.append({"file": rel, "line": int(line_no), "text": text})

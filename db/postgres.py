@@ -101,6 +101,20 @@ def insert_gap_report(report: dict) -> None:
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
+_schema_ready = False
+
+
+def _ensure_schema() -> None:
+    global _schema_ready
+    if _schema_ready:
+        return
+    try:
+        init_schema()
+        _schema_ready = True
+    except Exception:
+        pass
+
+
 def query_by_filters(
     filters: dict,
     keywords: list[str] | None = None,
@@ -142,6 +156,7 @@ def query_by_filters(
     sql = f"SELECT * FROM bsp_cases WHERE {where} ORDER BY id DESC LIMIT %s"
     params.append(limit)
 
+    _ensure_schema()
     try:
         from psycopg2.extras import RealDictCursor
         with _get_conn() as conn:
