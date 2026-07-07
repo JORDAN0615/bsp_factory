@@ -4,6 +4,7 @@ import sqlite3
 import json
 import shutil
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -85,7 +86,11 @@ def build_repair_graph(checkpointer=None):
     graph.add_conditional_edges(
         "patch_agent",
         route_after_patch_agent,
-        {"write_no_patch": "write_no_patch", "validate_patch": "validate_patch"},
+        {
+            "write_no_patch": "write_no_patch",
+            "validate_patch": "validate_patch",
+            "human_review": "human_review",
+        },
     )
     graph.add_conditional_edges(
         "write_no_patch",
@@ -262,20 +267,31 @@ def inspect_repo_node(graph_state: RepairGraphState) -> RepairGraphState:
     state.stage = "inspect_repo"
     from agent.nodes.workflow import _attempt_dir, _keywords_for_attempt, _repo_inspection_text
 
+    def _deterministic_inspection(prefix: str = "") -> str:
+        keywords = _keywords_for_attempt(state, attempt)
+        candidates = list_candidate_files(state.repo_path, keywords) if keywords else []
+        return prefix + _repo_inspection_text(state.repo_path, candidates)
+
     if settings.react_evidence_enabled:
         from agent.tools.react_evidence import gather_evidence
 
-        repo_inspection = gather_evidence(
-            state.repo_path,
-            state.issue,
-            attempt.selected_skills,
-            settings,
-            recursion_limit=settings.evidence_recursion_limit,
-        )
+        try:
+            repo_inspection = gather_evidence(
+                state.repo_path,
+                state.issue,
+                attempt.selected_skills,
+                settings,
+                recursion_limit=settings.evidence_recursion_limit,
+            )
+        except LLMError as exc:
+            # ReAct evidence hit a transient LLM failure before collecting any
+            # rounds. Fall back to the deterministic keyword inspection so the
+            # run keeps moving; the patch agent owns any escalation.
+            repo_inspection = _deterministic_inspection(
+                f"(ReAct evidence unavailable: {exc}; deterministic inspection used)\n\n"
+            )
     else:
-        keywords = _keywords_for_attempt(state, attempt)
-        candidates = list_candidate_files(state.repo_path, keywords) if keywords else []
-        repo_inspection = _repo_inspection_text(state.repo_path, candidates)
+        repo_inspection = _deterministic_inspection()
     write_text(_attempt_dir(state) / "repo_inspection.md", repo_inspection)
     _save_state(state)
     return {"state": state, "repo_inspection": repo_inspection}
@@ -295,26 +311,67 @@ def patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
         from agent.tools.patch_agent import run_patch_agent
         from agent.tools.retry_tools import build_retry_context
 
-        staging_path = Path(tempfile.mkdtemp(prefix=f"bsp-agent-{state.run_id}-"))
-        try:
-            staging_path.rmdir()
-        except OSError:
-            pass
-        staging = str(staging_path)
-        try:
-            add_worktree(state.repo_path, staging)
-            run_patch_agent(
-                staging,
-                state.issue,
-                skill_text,
-                repo_inspection,
-                build_retry_context(state),
-                settings,
+        rounds = 1 + settings.llm_failure_node_retries
+        retry_context = build_retry_context(state)
+        last_error: str | None = None
+        diff_text = ""
+        succeeded = False
+        for round_no in range(1, rounds + 1):
+            staging_path = Path(tempfile.mkdtemp(prefix=f"bsp-agent-{state.run_id}-"))
+            try:
+                staging_path.rmdir()
+            except OSError:
+                pass
+            staging = str(staging_path)
+            failed = False
+            try:
+                add_worktree(state.repo_path, staging)
+                run_patch_agent(
+                    staging,
+                    state.issue,
+                    skill_text,
+                    repo_inspection,
+                    retry_context,
+                    settings,
+                )
+                diff_text = diff_worktree(staging)
+            except LLMError as exc:
+                # Transient LLM failure. Dump whatever the agent edited before
+                # the failure for forensics, then discard the partial edits.
+                last_error = str(exc)
+                failed = True
+                try:
+                    partial = diff_worktree(staging)
+                except Exception:
+                    partial = ""
+                if partial.strip():
+                    write_text(
+                        _attempt_dir(state) / "debug" / f"partial_patch_round{round_no}.diff",
+                        partial,
+                    )
+            finally:
+                remove_worktree(state.repo_path, staging)
+                shutil.rmtree(staging, ignore_errors=True)
+            if not failed:
+                succeeded = True
+                break
+            if round_no < rounds:
+                time.sleep(settings.llm_failure_retry_delay_sec)
+
+        if not succeeded:
+            # All rounds hit a transient LLM failure. Pause at human_review in
+            # llm_failure mode without consuming the max_loops budget.
+            state.failure_reason = (
+                f"Patch Agent LLM unavailable after {rounds} round(s): {last_error}"
             )
-            diff_text = diff_worktree(staging)
-        finally:
-            remove_worktree(state.repo_path, staging)
-            shutil.rmtree(staging, ignore_errors=True)
+            _save_state(state)
+            return {
+                "state": state,
+                "diff_text": "",
+                "no_patch_reason": None,
+                "patch_format": "diff",
+            }
+
         if not diff_text.strip():
             _save_state(state)
             return {
@@ -348,7 +405,11 @@ def patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
     }
 
 
-def route_after_patch_agent(graph_state: RepairGraphState) -> Literal["write_no_patch", "validate_patch"]:
+def route_after_patch_agent(
+    graph_state: RepairGraphState,
+) -> Literal["write_no_patch", "validate_patch", "human_review"]:
+    if graph_state["state"].failure_reason:
+        return "human_review"
     if graph_state.get("no_patch_reason") or graph_state.get("diff_text") == "NO_PATCH":
         return "write_no_patch"
     return "validate_patch"
@@ -481,25 +542,62 @@ def route_after_code_review(
 def human_review_node(graph_state: RepairGraphState) -> RepairGraphState:
     state = graph_state["state"]
     attempt = state.current_attempt
-    state.human_directed = True
-    state.stage = "human_review"
-    _save_state(state)
     from agent.nodes.workflow import _attempt_dir
 
-    payload = {
-        "type": "human_review",
-        "run_id": state.run_id,
-        "run_dir": state.run_dir,
-        "attempt_no": attempt.attempt_no,
-        "patch_status": attempt.patch_status,
-        "changed_files": attempt.changed_files,
-        "patch_path": str(_attempt_dir(state) / "patch.md"),
-        "code_review_path": str(_attempt_dir(state) / "code_review.md"),
-        "code_review_decision": attempt.code_review_decision,
-        "message": "Review the patch and resume with approve or reject.",
-    }
+    # failure_reason is the mode discriminator and is persisted, so the mode is
+    # stable across the interrupt/resume boundary.
+    mode = "llm_failure" if state.failure_reason else "patch_review"
+    if mode == "patch_review":
+        # A human is now making a quality judgment; the run is human-directed for
+        # the rest of its life (ADR-0009). An LLM-failure pause is not a quality
+        # judgment, so it must not flip this flag.
+        state.human_directed = True
+    state.stage = "human_review"
+    _save_state(state)
+
+    if mode == "llm_failure":
+        payload = {
+            "type": "human_review",
+            "mode": "llm_failure",
+            "run_id": state.run_id,
+            "run_dir": state.run_dir,
+            "attempt_no": attempt.attempt_no,
+            "failure_reason": state.failure_reason,
+            "message": "The LLM was unavailable. Resume with retry or abandon.",
+        }
+    else:
+        payload = {
+            "type": "human_review",
+            "mode": "patch_review",
+            "run_id": state.run_id,
+            "run_dir": state.run_dir,
+            "attempt_no": attempt.attempt_no,
+            "patch_status": attempt.patch_status,
+            "changed_files": attempt.changed_files,
+            "patch_path": str(_attempt_dir(state) / "patch.md"),
+            "code_review_path": str(_attempt_dir(state) / "code_review.md"),
+            "code_review_decision": attempt.code_review_decision,
+            "message": "Review the patch and resume with approve or reject.",
+        }
     decision = interrupt(payload)
     action = decision.get("action") if isinstance(decision, dict) else None
+
+    if action == "retry":
+        if mode != "llm_failure":
+            raise RuntimeError("retry is only valid for an LLM-failure pause")
+        # Re-run the same attempt from the top without consuming max_loops.
+        state.failure_reason = None
+        state.stage = "classify_error"
+        _save_state(state)
+        return {
+            "state": state,
+            "review_route": "classify_error",
+            "no_patch_reason": None,
+            "diff_text": "",
+        }
+    if mode == "llm_failure":
+        raise RuntimeError("run is paused on an LLM failure; use retry or abandon")
+
     if action == "approve":
         if attempt.patch_status != "generated":
             raise RuntimeError(
@@ -663,7 +761,7 @@ def _select_skills_with_llm(
         raw = chat_completion(
             LLMConfig(settings.llm_base_url, settings.llm_api_key, settings.llm_model),
             messages,
-            timeout_sec=60,
+            timeout_sec=settings.llm_timeout_sec,
             name="select_skills",
         )
     except LLMError as exc:

@@ -32,13 +32,15 @@ def run_patch_agent(
     from langchain_openai import ChatOpenAI
     from langgraph.errors import GraphRecursionError
 
+    from agent.tools.llm_tools import LLMError, transient_llm_errors
+
     model = ChatOpenAI(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         model=settings.llm_model,
         temperature=0,
-        timeout=60,
-        max_retries=2,
+        timeout=settings.llm_timeout_sec,
+        max_retries=settings.llm_max_retries,
     )
     agent = create_agent(
         model=model,
@@ -68,3 +70,7 @@ def run_patch_agent(
                 pass
     except GraphRecursionError:
         return
+    except transient_llm_errors() as exc:
+        # Normalize to LLMError so the graph layer only handles one type. The
+        # partial staging edits are the caller's to dump/discard.
+        raise LLMError(str(exc)) from exc

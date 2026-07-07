@@ -15,6 +15,7 @@ from agent.nodes.workflow import (
     abandon_run,
     approve_run,
     create_run,
+    delete_run,
     list_pending_runs,
     publish_run,
     reject_run,
@@ -401,6 +402,85 @@ def test_abandon_run_sets_report_and_releases_lock(tmp_path: Path, monkeypatch) 
     assert result.stage == "report"
     assert commands == [["reset", "--hard"], ["clean", "-fd"]]
     assert not run_lock.is_active(settings.runs_dir)
+
+
+def test_delete_run_removes_dir_and_releases_lock_for_pending_webhook(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = make_settings(tmp_path)
+    run_dir = tmp_path / "runs" / "run123"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(run_dir),
+        stage="human_review",
+        issue="camera failed",
+        issue_notes_url="https://gitlab/api/v4/projects/1/issues/11/notes",
+        attempts=[RepairAttempt(attempt_no=1, patch_status="generated")],
+    )
+    state.save()
+    assert run_lock.acquire_active(settings.runs_dir)
+    commands = []
+    monkeypatch.setattr(
+        "agent.nodes.workflow.run_git", lambda repo_path, args: commands.append(args)
+    )
+    monkeypatch.setattr("agent.nodes.workflow._cleanup_managed_branch", lambda state, settings: None)
+
+    run_id = delete_run(run_dir, settings)
+
+    assert run_id == "run123"
+    assert not run_dir.exists()
+    # Lock released (this run held it), and the tree was NOT touched (patch not applied).
+    assert not run_lock.is_active(settings.runs_dir)
+    assert commands == []
+
+
+def test_delete_run_keeps_lock_for_non_pending_run(tmp_path: Path, monkeypatch) -> None:
+    settings = make_settings(tmp_path)
+    run_dir = tmp_path / "runs" / "run123"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(run_dir),
+        stage="published",
+        issue="camera failed",
+        issue_notes_url="https://gitlab/api/v4/projects/1/issues/11/notes",
+        attempts=[RepairAttempt(attempt_no=1, patch_status="applied")],
+    )
+    state.save()
+    # A different run holds the lock; deleting this published run must not release it.
+    assert run_lock.acquire_active(settings.runs_dir)
+    monkeypatch.setattr("agent.nodes.workflow.run_git", lambda repo_path, args: None)
+    monkeypatch.setattr("agent.nodes.workflow._cleanup_managed_branch", lambda state, settings: None)
+
+    delete_run(run_dir, settings)
+
+    assert not run_dir.exists()
+    assert run_lock.is_active(settings.runs_dir)
+
+
+def test_delete_run_resets_tree_only_when_patch_applied(tmp_path: Path, monkeypatch) -> None:
+    settings = make_settings(tmp_path)
+    run_dir = tmp_path / "runs" / "run123"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(tmp_path / "repo"),
+        run_dir=str(run_dir),
+        stage="target_ready",
+        issue="camera failed",
+        attempts=[RepairAttempt(attempt_no=1, patch_status="applied")],
+    )
+    state.save()
+    commands = []
+    monkeypatch.setattr(
+        "agent.nodes.workflow.run_git", lambda repo_path, args: commands.append(args)
+    )
+    monkeypatch.setattr("agent.nodes.workflow._cleanup_managed_branch", lambda state, settings: None)
+
+    delete_run(run_dir, settings)
+
+    assert commands == [["reset", "--hard"], ["clean", "-fd"]]
+    assert not run_dir.exists()
 
 
 def test_managed_run_creates_work_branch_at_start(tmp_path: Path, monkeypatch) -> None:

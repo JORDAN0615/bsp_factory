@@ -2,6 +2,8 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
 
 export type ReviewDecision = "pass" | "needs_human" | "reject" | string | null;
 
+export type ReviewMode = "patch_review" | "llm_failure" | string;
+
 export type PendingRun = {
   run_id: string;
   run_dir?: string;
@@ -10,6 +12,8 @@ export type PendingRun = {
   code_review: ReviewDecision;
   issue_first_line?: string;
   attempt_no?: number;
+  mode?: ReviewMode;
+  failure_reason?: string | null;
 };
 
 export type RunDetail = {
@@ -19,6 +23,8 @@ export type RunDetail = {
   attempt_no: number;
   changed_files: string[];
   publish_error: string | null;
+  mode: ReviewMode;
+  failure_reason: string | null;
   code_review: string;
   diff: string;
   repo_inspection: string;
@@ -47,6 +53,13 @@ export type PublishResult = {
 export type AbandonResult = {
   run_id: string;
   stage: string;
+};
+
+export type RetryResult = {
+  run_id: string;
+  stage: string;
+  attempt_no: number;
+  failure_reason: string | null;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -101,5 +114,22 @@ export function publishRun(runId: string): Promise<PublishResult> {
 export function abandonRun(runId: string): Promise<AbandonResult> {
   return request<AbandonResult>(`/api/runs/${encodeURIComponent(runId)}/abandon`, {
     method: "POST",
+  });
+}
+
+export function retryRun(runId: string): Promise<RetryResult> {
+  return request<RetryResult>(`/api/runs/${encodeURIComponent(runId)}/retry`, {
+    method: "POST",
+  });
+}
+
+export type DeleteResult = {
+  run_id: string;
+  deleted: boolean;
+};
+
+export function deleteRun(runId: string): Promise<DeleteResult> {
+  return request<DeleteResult>(`/api/runs/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
   });
 }

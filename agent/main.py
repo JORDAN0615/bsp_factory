@@ -8,13 +8,16 @@ from rich.console import Console
 
 from agent.config import get_settings
 from agent.nodes.workflow import (
+    abandon_run,
     approve_run,
     continue_run,
     create_run,
+    delete_run,
     generate_report,
     list_pending_runs,
     register_target,
     reject_run,
+    retry_run,
     run_validation,
     show_diff,
 )
@@ -92,11 +95,46 @@ def approve(run: Path = typer.Option(..., exists=True, file_okay=False)) -> None
 
 @app.command("review")
 def review(run: Path = typer.Option(..., exists=True, file_okay=False)) -> None:
+    state = BSPAgentState.load(run)
+    if state.stage == "human_review" and state.failure_reason:
+        console.print("[red]LLM failure — no patch to review.[/red]")
+        console.print(f"[yellow]Reason:[/yellow] {state.failure_reason}")
+        console.print("[bold]Next:[/bold]")
+        console.print(f"  .venv/bin/bsp-agent retry --run {run}", soft_wrap=True)
+        console.print(f"  .venv/bin/bsp-agent abandon --run {run}", soft_wrap=True)
+        return
     try:
         show_diff(run)
         _review_prompt(run)
     except (GitError, PatchError, RuntimeError, ValueError) as exc:
         fail(str(exc))
+
+
+@app.command("retry")
+def retry(run: Path = typer.Option(..., exists=True, file_okay=False)) -> None:
+    try:
+        state = retry_run(run, get_settings())
+    except (GitError, PatchError, RuntimeError, ValueError) as exc:
+        fail(str(exc))
+    console.print(f"[green]Retried run.[/green] Stage: {state.stage}")
+
+
+@app.command("abandon")
+def abandon(run: Path = typer.Option(..., exists=True, file_okay=False)) -> None:
+    try:
+        state = abandon_run(run, get_settings())
+    except (GitError, RuntimeError, ValueError) as exc:
+        fail(str(exc))
+    console.print(f"[yellow]Abandoned run.[/yellow] Stage: {state.stage}")
+
+
+@app.command("delete")
+def delete(run: Path = typer.Option(..., exists=True, file_okay=False)) -> None:
+    try:
+        run_id = delete_run(run, get_settings())
+    except (GitError, RuntimeError, ValueError) as exc:
+        fail(str(exc))
+    console.print(f"[red]Deleted run:[/red] {run_id}")
 
 
 @app.command("reject")

@@ -84,6 +84,8 @@ def test_api_run_detail_returns_state_and_artifacts(tmp_path: Path, monkeypatch)
         "attempt_no": 1,
         "changed_files": ["board-camera.dts"],
         "publish_error": None,
+        "mode": "patch_review",
+        "failure_reason": None,
         "code_review": "review text",
         "diff": "diff text",
         "repo_inspection": "inspection text",
