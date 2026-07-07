@@ -99,6 +99,7 @@ class BSPAgentState(BaseModel):
     attempts: list[RepairAttempt] = Field(default_factory=list)
     max_loops: int = 3
     human_directed: bool = False
+    failure_reason: str | None = None
     managed_base_branch: str | None = None
     issue_notes_url: str | None = None
     report_path: str | None = None

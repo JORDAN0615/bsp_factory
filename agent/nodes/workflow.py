@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 from rich.console import Console
@@ -108,7 +109,9 @@ def publish_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
 
 def abandon_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
     state = BSPAgentState.load(run_dir)
-    if state.stage != "publish_failed":
+    is_publish_failed = state.stage == "publish_failed"
+    is_llm_failure = state.stage == "human_review" and bool(state.failure_reason)
+    if not (is_publish_failed or is_llm_failure):
         raise RuntimeError(f"Run is not waiting for abandon: {state.stage}")
     run_git(state.repo_path, ["reset", "--hard"])
     run_git(state.repo_path, ["clean", "-fd"])
@@ -117,6 +120,48 @@ def abandon_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
     state.touch()
     state.save()
     run_lock.release_active(settings.runs_dir)
+    return state
+
+
+def delete_run(run_dir: str | Path, settings: Settings) -> str:
+    """Permanently remove a run directory and clean up anything it holds.
+
+    Cleanup is conditional and best-effort so deleting one run never corrupts
+    the shared BSP repo or another run's state:
+    - the working tree is only reset when this run actually applied a patch;
+    - the managed work branch is cleaned up only under auto-push (guarded);
+    - the webhook run lock is released only when this run currently holds it,
+      which is exactly while a webhook run sits at ``human_review``.
+    """
+    run_dir = Path(run_dir)
+    state = BSPAgentState.load(run_dir)
+    attempt = state.current_attempt if state.attempts else None
+    if attempt is not None and attempt.patch_status == "applied":
+        try:
+            run_git(state.repo_path, ["reset", "--hard"])
+            run_git(state.repo_path, ["clean", "-fd"])
+        except Exception:  # noqa: BLE001
+            console.print("[yellow]Warning: failed to restore the working tree during delete.[/yellow]")
+    _cleanup_managed_branch(state, settings)
+    if state.stage == "human_review" and state.issue_notes_url:
+        run_lock.release_active(settings.runs_dir)
+    shutil.rmtree(run_dir, ignore_errors=True)
+    return state.run_id
+
+
+def retry_run(run_dir: str | Path, settings: Settings) -> BSPAgentState:
+    state = BSPAgentState.load(run_dir)
+    if not (state.stage == "human_review" and state.failure_reason):
+        raise RuntimeError(f"Run is not paused on an LLM failure: stage={state.stage}")
+    from agent.graph import resume_review_graph
+
+    state = resume_review_graph(state, settings, {"action": "retry"})
+    if state.stage == "report":
+        _cleanup_managed_branch(state, settings)
+        generate_report(Path(state.run_dir))
+        if state.issue_notes_url:
+            run_lock.release_active(settings.runs_dir)
+        return BSPAgentState.load(run_dir)
     return state
 
 
@@ -176,6 +221,8 @@ def list_pending_runs(settings: Settings) -> list[dict]:
                 "changed_files": attempt.changed_files,
                 "code_review": attempt.code_review_decision,
                 "issue_first_line": (state.issue or "").splitlines()[0][:80],
+                "mode": "llm_failure" if state.failure_reason else "patch_review",
+                "failure_reason": state.failure_reason,
             }
         )
     return results
@@ -433,7 +480,7 @@ def _propose_patch(
         response = chat_completion(
             LLMConfig(settings.llm_base_url, settings.llm_api_key, settings.llm_model),
             messages,
-            timeout_sec=60,
+            timeout_sec=settings.llm_timeout_sec,
             name="patch_agent",
         )
     except LLMError as exc:

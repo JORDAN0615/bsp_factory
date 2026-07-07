@@ -45,13 +45,15 @@ def gather_evidence(
     from langchain_openai import ChatOpenAI
     from langgraph.errors import GraphRecursionError
 
+    from agent.tools.llm_tools import LLMError, transient_llm_errors
+
     model = ChatOpenAI(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         model=settings.llm_model,
         temperature=0,
-        timeout=60,
-        max_retries=2,
+        timeout=settings.llm_timeout_sec,
+        max_retries=settings.llm_max_retries,
     )
     agent = create_agent(
         model=model,
@@ -70,7 +72,7 @@ def gather_evidence(
         "Use tools as needed, then write concise findings. Do not propose a diff."
     )
     messages: list[Any] = []
-    converged = True
+    findings: str | None = None
     try:
         with readonly_repo(repo_path):
             for chunk in agent.stream(
@@ -81,12 +83,15 @@ def gather_evidence(
                 if isinstance(chunk, dict) and chunk.get("messages"):
                     messages = chunk["messages"]
     except GraphRecursionError:
-        converged = False
-    findings = (
-        None
-        if converged
-        else f"(did not fully converge within {limit} rounds; partial evidence below)"
-    )
+        findings = f"(did not fully converge within {limit} rounds; partial evidence below)"
+    except transient_llm_errors() as exc:
+        # Transient LLM failure. If we already collected some tool rounds, keep
+        # them as partial evidence and let the run continue. If nothing was
+        # collected, raise LLMError so inspect_repo_node can fall back to the
+        # deterministic keyword inspection.
+        if not messages:
+            raise LLMError(str(exc)) from exc
+        findings = f"(LLM transient failure after partial evidence: {exc})"
     return render_evidence_md(messages=messages, findings=findings)
 
 

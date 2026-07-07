@@ -1,16 +1,19 @@
-import { ArrowLeft, Ban, CheckCircle2, RotateCw, XCircle } from "lucide-react";
+import { ArrowLeft, Ban, CheckCircle2, RotateCw, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   abandonRun,
   approveRun,
+  deleteRun,
   getRun,
   publishRun,
   rejectRun,
+  retryRun,
   type AbandonResult,
   type ApproveResult,
   type PublishResult,
   type RejectResult,
+  type RetryResult,
   type RunDetail,
 } from "../api";
 import { CodeReviewPanel } from "../components/codeReview";
@@ -19,6 +22,7 @@ import { ErrorText, Panel, Shell, Skeleton, Spinner, StageBadge } from "../compo
 
 export function RunDetailPage() {
   const { runId } = useParams();
+  const navigate = useNavigate();
   const decodedRunId = useMemo(() => (runId ? decodeURIComponent(runId) : ""), [runId]);
   const [run, setRun] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,10 +32,13 @@ export function RunDetailPage() {
   const [rejectResult, setRejectResult] = useState<RejectResult | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
   const [abandonResult, setAbandonResult] = useState<AbandonResult | null>(null);
+  const [retryResult, setRetryResult] = useState<RetryResult | null>(null);
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [showReject, setShowReject] = useState(false);
   const [feedback, setFeedback] = useState("");
 
@@ -130,6 +137,41 @@ export function RunDetailPage() {
     }
   }
 
+  async function onRetry() {
+    if (!run) {
+      return;
+    }
+    setRetrying(true);
+    setActionError(null);
+    setRetryResult(null);
+    try {
+      const result = await retryRun(run.run_id);
+      setRetryResult(result);
+      // The pipeline re-ran: reload to pick up the fresh diff, review, and mode.
+      await load();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Retry failed.");
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  async function onDelete() {
+    if (!run) {
+      return;
+    }
+    setDeleting(true);
+    setActionError(null);
+    try {
+      await deleteRun(run.run_id);
+      // The run is gone; go back to the console.
+      navigate("/");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Delete failed.");
+      setDeleting(false);
+    }
+  }
+
   if (loading) {
     return (
       <Shell>
@@ -168,24 +210,38 @@ export function RunDetailPage() {
           <p className="whitespace-pre-wrap text-base leading-7 text-text">{run.issue}</p>
         </Panel>
 
-        <Panel title="Code Review">
-          <CodeReviewPanel markdown={run.code_review} />
-        </Panel>
+        {run.mode === "llm_failure" ? (
+          <Panel title="LLM Failure">
+            <p className="mb-2 text-sm text-muted">
+              The LLM was unavailable, so no patch was produced. Retry to re-run this attempt (the
+              retry budget is not consumed), or abandon the run.
+            </p>
+            <p className="whitespace-pre-wrap rounded border border-danger/40 bg-red-50 px-3 py-2 font-mono text-sm text-danger">
+              {run.failure_reason || "Unknown LLM failure."}
+            </p>
+          </Panel>
+        ) : (
+          <>
+            <Panel title="Code Review">
+              <CodeReviewPanel markdown={run.code_review} />
+            </Panel>
 
-        <Panel title="Diff">
-          <div className="mb-4 flex flex-wrap gap-2">
-            {run.changed_files.length > 0 ? (
-              run.changed_files.map((file) => (
-                <span key={file} className="rounded border border-border bg-surface-hover px-2.5 py-1 font-mono text-xs text-muted">
-                  {file}
-                </span>
-              ))
-            ) : (
-              <span className="text-sm text-muted">No changed files reported.</span>
-            )}
-          </div>
-          <DiffViewer diff={run.diff} />
-        </Panel>
+            <Panel title="Diff">
+              <div className="mb-4 flex flex-wrap gap-2">
+                {run.changed_files.length > 0 ? (
+                  run.changed_files.map((file) => (
+                    <span key={file} className="rounded border border-border bg-surface-hover px-2.5 py-1 font-mono text-xs text-muted">
+                      {file}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-sm text-muted">No changed files reported.</span>
+                )}
+              </div>
+              <DiffViewer diff={run.diff} />
+            </Panel>
+          </>
+        )}
       </div>
 
       <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-surface/95 px-4 py-4 shadow-sm backdrop-blur">
@@ -217,10 +273,15 @@ export function RunDetailPage() {
             {run.stage === "publish_failed" && run.publish_error ? (
               <p className="text-danger">Publish error: {run.publish_error}</p>
             ) : null}
+            {retryResult ? (
+              <p className="text-warn">
+                Retried. Current stage: <span className="font-semibold">{retryResult.stage}</span>.
+              </p>
+            ) : null}
             {actionError ? <ErrorText>{actionError}</ErrorText> : null}
           </div>
 
-          {run.stage === "human_review" ? (
+          {run.stage === "human_review" && run.mode !== "llm_failure" ? (
             <div className="flex flex-col gap-3 sm:items-end">
             {showReject ? (
               <div className="w-full sm:w-[420px]">
@@ -238,6 +299,15 @@ export function RunDetailPage() {
               </div>
             ) : null}
             <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void onDelete()}
+                disabled={approving || rejecting || deleting}
+                className="focus-ring inline-flex items-center gap-2 rounded border border-border bg-surface px-4 py-2 text-sm font-semibold text-muted hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deleting ? <Spinner /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+                Delete
+              </button>
               <button
                 type="button"
                 onClick={() => setShowReject((value) => !value)}
@@ -290,6 +360,38 @@ export function RunDetailPage() {
               >
                 {publishing ? <Spinner /> : <RotateCw className="h-4 w-4" aria-hidden="true" />}
                 Retry push
+              </button>
+            </div>
+          ) : null}
+
+          {run.stage === "human_review" && run.mode === "llm_failure" ? (
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void onDelete()}
+                disabled={retrying || abandoning || deleting}
+                className="focus-ring inline-flex items-center gap-2 rounded border border-border bg-surface px-4 py-2 text-sm font-semibold text-muted hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deleting ? <Spinner /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+                Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => void onAbandon()}
+                disabled={retrying || abandoning}
+                className="focus-ring inline-flex items-center gap-2 rounded border border-danger bg-red-50 px-4 py-2 text-sm font-semibold text-danger hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {abandoning ? <Spinner /> : <Ban className="h-4 w-4" aria-hidden="true" />}
+                Abandon
+              </button>
+              <button
+                type="button"
+                onClick={() => void onRetry()}
+                disabled={retrying || abandoning}
+                className="focus-ring inline-flex items-center gap-2 rounded border border-approve bg-approve px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {retrying ? <Spinner /> : <RotateCw className="h-4 w-4" aria-hidden="true" />}
+                Retry
               </button>
             </div>
           ) : null}

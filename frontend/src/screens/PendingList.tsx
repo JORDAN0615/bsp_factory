@@ -77,7 +77,13 @@ export function PendingList() {
                   {run.issue_no ? `GitLab #${run.issue_no}` : "No issue"}
                 </div>
                 <div className="self-center">
-                  <DecisionBadge decision={run.code_review} />
+                  {run.mode === "llm_failure" ? (
+                    <span className="inline-flex items-center rounded border border-danger/40 bg-red-50 px-2 py-0.5 text-xs font-semibold text-danger">
+                      LLM failure
+                    </span>
+                  ) : (
+                    <DecisionBadge decision={run.code_review} />
+                  )}
                 </div>
                 <div className="self-center text-sm text-muted">
                   <span className="font-medium text-text">{run.changed_files.length}</span> changed files

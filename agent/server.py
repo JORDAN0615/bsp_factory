@@ -14,9 +14,11 @@ from agent.nodes.workflow import (
     abandon_run,
     approve_run,
     create_run,
+    delete_run,
     list_pending_runs,
     publish_run,
     reject_run,
+    retry_run,
 )
 from agent import run_lock
 from agent.state import BSPAgentState
@@ -90,6 +92,8 @@ def api_run_detail(run_id: str) -> dict:
         "attempt_no": attempt.attempt_no,
         "changed_files": attempt.changed_files,
         "publish_error": attempt.publish_error,
+        "mode": "llm_failure" if state.failure_reason else "patch_review",
+        "failure_reason": state.failure_reason,
         "code_review": _read_artifact(artifact_dir / "code_review.md"),
         "diff": _read_artifact(artifact_dir / "patch.md"),
         "repo_inspection": _read_artifact(artifact_dir / "repo_inspection.md"),
@@ -142,6 +146,20 @@ def api_publish_run(run_id: str) -> dict:
     }
 
 
+@app.post("/api/runs/{run_id:path}/retry")
+def api_retry_run(run_id: str) -> dict:
+    try:
+        state = retry_run(_run_dir(run_id), settings)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "run_id": state.run_id,
+        "stage": state.stage,
+        "attempt_no": state.current_attempt.attempt_no,
+        "failure_reason": state.failure_reason,
+    }
+
+
 @app.post("/api/runs/{run_id:path}/abandon")
 def api_abandon_run(run_id: str) -> dict:
     try:
@@ -152,6 +170,15 @@ def api_abandon_run(run_id: str) -> dict:
         "run_id": state.run_id,
         "stage": state.stage,
     }
+
+
+@app.delete("/api/runs/{run_id:path}")
+def api_delete_run(run_id: str) -> dict:
+    try:
+        deleted_id = delete_run(_run_dir(run_id), settings)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"run_id": deleted_id, "deleted": True}
 
 
 @app.post("/webhook/github")

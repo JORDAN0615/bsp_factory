@@ -35,7 +35,7 @@ def run_code_review(
         raw = chat_completion(
             LLMConfig(settings.llm_base_url, settings.llm_api_key, settings.llm_model),
             messages,
-            timeout_sec=60,
+            timeout_sec=settings.llm_timeout_sec,
             name="code_review_agent",
         )
         review = _parse_review(raw)

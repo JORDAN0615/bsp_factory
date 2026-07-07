@@ -19,6 +19,26 @@ class LLMError(RuntimeError):
     pass
 
 
+def transient_llm_errors() -> tuple[type[BaseException], ...]:
+    """Errors where retrying the same request later can succeed.
+
+    Covers the urllib choke point (LLMError) plus the openai SDK exceptions
+    raised by the agentic ChatOpenAI nodes. openai ships with langchain-openai,
+    so the import guard only matters in environments without the agentic extras.
+    """
+    errors: tuple[type[BaseException], ...] = (LLMError,)
+    try:
+        import openai
+    except ImportError:
+        return errors
+    return errors + (
+        openai.APITimeoutError,
+        openai.APIConnectionError,
+        openai.RateLimitError,
+        openai.InternalServerError,
+    )
+
+
 def chat_completion(
     config: LLMConfig,
     messages: list[dict[str, str]],
