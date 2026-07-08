@@ -12,6 +12,7 @@ Stage = Literal[
     "classify_error",
     "select_skills",
     "load_skill",
+    "retrieve_mic741_knowledge",
     "inspect_repo",
     "propose_patch",
     "validate_patch",
