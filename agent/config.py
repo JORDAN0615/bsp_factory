@@ -27,6 +27,20 @@ class Settings(BaseSettings):
     react_evidence_enabled: bool = Field(default=False, alias="REACT_EVIDENCE_ENABLED")
     patch_agent_agentic: bool = Field(default=False, alias="PATCH_AGENT_AGENTIC")
     evidence_recursion_limit: int = Field(default=12, alias="EVIDENCE_RECURSION_LIMIT")
+    patch_agent_recursion_limit: int = Field(default=40, alias="PATCH_AGENT_RECURSION_LIMIT")
+    mic741_knowledge_enabled: bool = Field(default=False, alias="MIC741_KNOWLEDGE_ENABLED")
+    mic741_knowledge_db_url: str = Field(default="", alias="MIC741_KNOWLEDGE_DB_URL")
+    mic741_knowledge_source_dir: Path = Field(
+        default=Path("RAG_DOCS/MIC-741_KnowledgeBase"),
+        alias="MIC741_KNOWLEDGE_SOURCE_DIR",
+    )
+    mic741_knowledge_query_limit: int = Field(default=10, alias="MIC741_KNOWLEDGE_QUERY_LIMIT")
+    mic741_knowledge_hunk_budget_chars: int = Field(
+        default=16000,
+        alias="MIC741_KNOWLEDGE_HUNK_BUDGET_CHARS",
+    )
+    mic741_rerank_enabled: bool = Field(default=True, alias="MIC741_RERANK_ENABLED")
+    mic741_rerank_top_k: int = Field(default=3, alias="MIC741_RERANK_TOP_K")
     auto_push_enabled: bool = Field(default=False, alias="AUTO_PUSH_ENABLED")
     git_remote: str = Field(default="origin", alias="GIT_REMOTE")
     bsp_base_branch: str = Field(default="", alias="BSP_BASE_BRANCH")

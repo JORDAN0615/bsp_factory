@@ -44,13 +44,14 @@ def chat_completion(
     messages: list[dict[str, str]],
     timeout_sec: int = 60,
     name: str = "chat_completion",
+    temperature: float = 0.1,
 ) -> str:
     url = config.base_url.rstrip("/") + "/chat/completions"
     body = json.dumps(
         {
             "model": config.model,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": temperature,
         }
     ).encode("utf-8")
     request = urllib.request.Request(

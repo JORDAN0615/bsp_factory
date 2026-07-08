@@ -23,6 +23,12 @@ from agent.nodes.workflow import (
 )
 from agent.state import BSPAgentState
 from agent.tools.git_tools import GitError
+from agent.tools.mic741_knowledge import (
+    KnowledgeDBError,
+    ingest_mic741_knowledge,
+    init_schema,
+    query_mic741_knowledge,
+)
 from agent.tools.patch_tools import PatchError
 from agent.tools.path_tools import SafetyError
 from agent.tools.test_tools import ValidationError
@@ -219,6 +225,54 @@ def pending() -> None:
         console.print(f"  {row['issue_first_line']}")
         console.print(f"  .venv/bin/bsp-agent review --run {row['run_dir']}")
         console.print("")
+
+
+@app.command("knowledge-init")
+def knowledge_init() -> None:
+    settings = get_settings()
+    try:
+        init_schema(settings.mic741_knowledge_db_url)
+    except KnowledgeDBError as exc:
+        fail(str(exc))
+    console.print("[green]MIC-741 knowledge schema initialized.[/green]")
+
+
+@app.command("knowledge-ingest")
+def knowledge_ingest(
+    source: Path | None = typer.Option(
+        None,
+        exists=True,
+        file_okay=False,
+        help="MIC-741_KnowledgeBase directory.",
+    ),
+) -> None:
+    settings = get_settings()
+    try:
+        stats = ingest_mic741_knowledge(
+            source or settings.mic741_knowledge_source_dir,
+            settings.mic741_knowledge_db_url,
+        )
+    except KnowledgeDBError as exc:
+        fail(str(exc))
+    console.print(
+        "[green]MIC-741 knowledge ingested.[/green] "
+        f"cases={stats['cases']} files={stats['files']}"
+    )
+
+
+@app.command("knowledge-query")
+def knowledge_query(
+    issue: str = typer.Option(..., help="Issue text to search for."),
+    log: list[Path] = typer.Option(None, exists=True, dir_okay=False, help="Optional log file."),
+    limit: int | None = typer.Option(None, help="Maximum repair cases to return."),
+) -> None:
+    settings = get_settings()
+    logs = [path.read_text(encoding="utf-8", errors="replace") for path in log or []]
+    try:
+        markdown = query_mic741_knowledge(issue, logs, settings, limit=limit)
+    except KnowledgeDBError as exc:
+        fail(str(exc))
+    console.print(markdown)
 
 
 def _review_prompt(run: Path) -> None:
