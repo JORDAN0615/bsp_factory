@@ -71,6 +71,7 @@ def build_repair_graph(checkpointer=None):
     graph.add_node("select_skills", select_skills_node)
     graph.add_node("load_skill", load_skill_node)
     graph.add_node("retrieve_mic741_knowledge", retrieve_mic741_knowledge_node)
+    graph.add_node("retrieve_rag_crag", retrieve_rag_crag_node)
     graph.add_node("inspect_repo", inspect_repo_node)
     graph.add_node("patch_agent", patch_agent_node)
     graph.add_node("deep_patch_agent", deep_patch_agent_node)
@@ -85,8 +86,9 @@ def build_repair_graph(checkpointer=None):
     graph.add_edge("classify_error", "select_skills")
     graph.add_edge("select_skills", "load_skill")
     graph.add_edge("load_skill", "retrieve_mic741_knowledge")
+    graph.add_edge("retrieve_mic741_knowledge", "retrieve_rag_crag")
     graph.add_conditional_edges(
-        "retrieve_mic741_knowledge",
+        "retrieve_rag_crag",
         route_after_knowledge_retrieval,
         {
             "inspect_repo": "inspect_repo",
@@ -316,6 +318,49 @@ def retrieve_mic741_knowledge_node(graph_state: RepairGraphState) -> RepairGraph
     )
     _save_state(state)
     return {"state": state, "knowledge_context": knowledge_context}
+
+
+def retrieve_rag_crag_node(graph_state: RepairGraphState) -> RepairGraphState:
+    """CRAG semantic-search node — runs after FTS knowledge retrieval.
+
+    Augments knowledge_context with Qdrant + BM25 + Neo4j semantic search.
+    Disabled by default; enable with RAG_CRAG_ENABLED=true.
+    Fails gracefully: if RAG is unavailable the run continues unchanged.
+    """
+    settings = graph_state["settings"]
+    if not settings.rag_crag_enabled:
+        return {}
+
+    state = graph_state["state"]
+    attempt = state.current_attempt
+    from agent.nodes.workflow import _attempt_dir
+
+    query = state.issue
+    if attempt.error_signatures:
+        query += "\n\nError signatures: " + ", ".join(attempt.error_signatures)
+
+    rag_context = ""
+    try:
+        from rag.rag_graph import build_rag_graph, ensure_local_index
+        ensure_local_index(kb_dir=settings.mic741_knowledge_source_dir)
+        result = build_rag_graph().invoke({"original_input": query, "route": "kb"})
+        rag_context = result.get("rag_context", "")
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("RAG CRAG unavailable: %s", exc)
+
+    write_text(
+        _attempt_dir(state) / "debug" / "rag_crag_context.md",
+        rag_context or "(RAG CRAG no results)\n",
+    )
+    _save_state(state)
+
+    existing = graph_state.get("knowledge_context", "")
+    if rag_context:
+        merged = (existing.rstrip() + "\n\n" + rag_context).strip() if existing.strip() else rag_context
+    else:
+        merged = existing
+    return {"state": state, "knowledge_context": merged}
 
 
 def route_after_knowledge_retrieval(
