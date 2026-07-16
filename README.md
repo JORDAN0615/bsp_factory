@@ -14,8 +14,9 @@ issue / boot log
   -> classify_error
   -> select_skills
   -> load selected SKILL.md files only
-  -> inspect_repo
-  -> patch_agent
+  -> retrieve MIC-741 knowledge (optional)
+  -> inspect_repo -> patch_agent
+     OR Deep Patch Agent (experimental, combines inspection + staged editing)
   -> validate_patch with git apply --check
   -> code_review_agent
   -> human_review interrupt
@@ -57,8 +58,9 @@ The LangGraph flow is deterministic around the LLM calls:
 classify_error
   -> select_skills          LLM chooses which skill folders to load
   -> load_skill
-  -> inspect_repo
-  -> patch_agent            LLM emits unified diff or NO_PATCH
+  -> retrieve_mic741_knowledge
+  -> inspect_repo -> patch_agent
+     OR deep_patch_agent     Deep Agents plans, reads, delegates, and edits staging
   -> validate_patch         deterministic patch validation only
   -> code_review_agent      independent LLM review
   -> human_review           LangGraph interrupt
@@ -102,6 +104,10 @@ LLM_BASE_URL=http://your-openai-compatible-server/v1
 LLM_API_KEY=EMPTY
 LLM_MODEL=your-model
 
+# Experimental replacement for inspect_repo + patch_agent. Default off.
+DEEP_AGENT_ENABLED=false
+DEEP_AGENT_RECURSION_LIMIT=60
+
 AUTO_PUSH_ENABLED=false
 GIT_REMOTE=origin
 BSP_BASE_BRANCH=
@@ -117,6 +123,11 @@ LANGFUSE_SECRET_KEY=
 ```
 
 `BSP_REPO_PATH` is a local git working tree, not a GitLab/GitHub URL.
+
+The Deep Agent path is described in
+[`docs/adr/0016-deep-agent-patch-stage.md`](docs/adr/0016-deep-agent-patch-stage.md).
+It edits only a detached staging worktree. The deterministic validation, independent
+code review, human approval, apply, and publish stages remain unchanged.
 
 ## CLI Usage
 

@@ -26,8 +26,10 @@ class Settings(BaseSettings):
     code_review_enabled: bool = Field(default=True, alias="CODE_REVIEW_ENABLED")
     react_evidence_enabled: bool = Field(default=False, alias="REACT_EVIDENCE_ENABLED")
     patch_agent_agentic: bool = Field(default=False, alias="PATCH_AGENT_AGENTIC")
+    deep_agent_enabled: bool = Field(default=False, alias="DEEP_AGENT_ENABLED")
     evidence_recursion_limit: int = Field(default=12, alias="EVIDENCE_RECURSION_LIMIT")
     patch_agent_recursion_limit: int = Field(default=40, alias="PATCH_AGENT_RECURSION_LIMIT")
+    deep_agent_recursion_limit: int = Field(default=60, alias="DEEP_AGENT_RECURSION_LIMIT")
     mic741_knowledge_enabled: bool = Field(default=False, alias="MIC741_KNOWLEDGE_ENABLED")
     mic741_knowledge_db_url: str = Field(default="", alias="MIC741_KNOWLEDGE_DB_URL")
     mic741_knowledge_source_dir: Path = Field(

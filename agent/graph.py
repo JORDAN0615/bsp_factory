@@ -5,7 +5,7 @@ import json
 import shutil
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -73,6 +73,7 @@ def build_repair_graph(checkpointer=None):
     graph.add_node("retrieve_mic741_knowledge", retrieve_mic741_knowledge_node)
     graph.add_node("inspect_repo", inspect_repo_node)
     graph.add_node("patch_agent", patch_agent_node)
+    graph.add_node("deep_patch_agent", deep_patch_agent_node)
     graph.add_node("write_no_patch", write_no_patch_node)
     graph.add_node("validate_patch", validate_patch_node)
     graph.add_node("code_review_agent", code_review_agent_node)
@@ -84,10 +85,26 @@ def build_repair_graph(checkpointer=None):
     graph.add_edge("classify_error", "select_skills")
     graph.add_edge("select_skills", "load_skill")
     graph.add_edge("load_skill", "retrieve_mic741_knowledge")
-    graph.add_edge("retrieve_mic741_knowledge", "inspect_repo")
+    graph.add_conditional_edges(
+        "retrieve_mic741_knowledge",
+        route_after_knowledge_retrieval,
+        {
+            "inspect_repo": "inspect_repo",
+            "deep_patch_agent": "deep_patch_agent",
+        },
+    )
     graph.add_edge("inspect_repo", "patch_agent")
     graph.add_conditional_edges(
         "patch_agent",
+        route_after_patch_agent,
+        {
+            "write_no_patch": "write_no_patch",
+            "validate_patch": "validate_patch",
+            "human_review": "human_review",
+        },
+    )
+    graph.add_conditional_edges(
+        "deep_patch_agent",
         route_after_patch_agent,
         {
             "write_no_patch": "write_no_patch",
@@ -301,6 +318,14 @@ def retrieve_mic741_knowledge_node(graph_state: RepairGraphState) -> RepairGraph
     return {"state": state, "knowledge_context": knowledge_context}
 
 
+def route_after_knowledge_retrieval(
+    graph_state: RepairGraphState,
+) -> Literal["inspect_repo", "deep_patch_agent"]:
+    if graph_state["settings"].deep_agent_enabled:
+        return "deep_patch_agent"
+    return "inspect_repo"
+
+
 def inspect_repo_node(graph_state: RepairGraphState) -> RepairGraphState:
     state = graph_state["state"]
     settings = graph_state["settings"]
@@ -352,88 +377,30 @@ def patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
     skill_text = graph_state.get("skill_text", "")
     repo_inspection = graph_state.get("repo_inspection", "")
     if settings.patch_agent_agentic:
-        from agent.nodes.workflow import _attempt_dir
         from agent.tools.patch_agent import run_patch_agent
         from agent.tools.retry_tools import build_retry_context
 
-        rounds = 1 + settings.llm_failure_node_retries
         retry_context = build_retry_context(state)
-        last_error: str | None = None
-        diff_text = ""
-        succeeded = False
-        for round_no in range(1, rounds + 1):
-            staging_path = Path(tempfile.mkdtemp(prefix=f"bsp-agent-{state.run_id}-"))
-            try:
-                staging_path.rmdir()
-            except OSError:
-                pass
-            staging = str(staging_path)
-            failed = False
-            try:
-                add_worktree(state.repo_path, staging)
-                run_patch_agent(
-                    staging,
-                    state.issue,
-                    skill_text,
-                    repo_inspection,
-                    retry_context,
-                    settings,
-                    recursion_limit=settings.patch_agent_recursion_limit,
-                )
-                diff_text = diff_worktree(staging)
-            except LLMError as exc:
-                # Transient LLM failure. Dump whatever the agent edited before
-                # the failure for forensics, then discard the partial edits.
-                last_error = str(exc)
-                failed = True
-                try:
-                    partial = diff_worktree(staging)
-                except Exception:
-                    partial = ""
-                if partial.strip():
-                    write_text(
-                        _attempt_dir(state) / "debug" / f"partial_patch_round{round_no}.diff",
-                        partial,
-                    )
-            finally:
-                remove_worktree(state.repo_path, staging)
-                shutil.rmtree(staging, ignore_errors=True)
-            if not failed:
-                succeeded = True
-                break
-            if round_no < rounds:
-                time.sleep(settings.llm_failure_retry_delay_sec)
 
-        if not succeeded:
-            # All rounds hit a transient LLM failure. Pause at human_review in
-            # llm_failure mode without consuming the max_loops budget.
-            state.failure_reason = (
-                f"Patch Agent LLM unavailable after {rounds} round(s): {last_error}"
+        def run_agent(staging: str) -> None:
+            run_patch_agent(
+                staging,
+                state.issue,
+                skill_text,
+                repo_inspection,
+                retry_context,
+                settings,
+                recursion_limit=settings.patch_agent_recursion_limit,
             )
-            _save_state(state)
-            return {
-                "state": state,
-                "diff_text": "",
-                "no_patch_reason": None,
-                "patch_format": "diff",
-            }
 
-        if not diff_text.strip():
-            _save_state(state)
-            return {
-                "state": state,
-                "diff_text": "NO_PATCH",
-                "no_patch_reason": "Agentic patch agent made no edits.",
-                "patch_format": "diff",
-            }
-        write_text(_attempt_dir(state) / "agentic_patch.diff", diff_text)
-        _save_state(state)
-        return {
-            "state": state,
-            "diff_text": diff_text,
-            "no_patch_reason": None,
-            "patch_format": "diff",
-        }
+        return _run_staging_agent(
+            graph_state,
+            run_agent,
+            artifact_name="agentic_patch.diff",
+            partial_artifact_prefix="partial_patch_round",
+            no_edits_reason="Agentic patch agent made no edits.",
+            failure_label="Patch Agent",
+        )
 
     diff_text, no_patch_reason = _propose_patch(
         state,
@@ -448,6 +415,124 @@ def patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
         "diff_text": diff_text,
         "no_patch_reason": no_patch_reason,
         "patch_format": "edit_blocks",
+    }
+
+
+def deep_patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
+    """Run Deep Agents as the combined repository-inspection and patch stage."""
+    state = graph_state["state"]
+    settings = graph_state["settings"]
+    state.stage = "deep_patch_agent"
+    _save_state(state)
+    from agent.tools.deep_patch_agent import run_deep_patch_agent
+    from agent.tools.retry_tools import build_retry_context
+
+    skill_text = graph_state.get("skill_text", "")
+    knowledge_context = graph_state.get("knowledge_context", "")
+    retry_context = build_retry_context(state)
+
+    def run_agent(staging: str) -> None:
+        run_deep_patch_agent(
+            staging,
+            state.issue,
+            skill_text,
+            knowledge_context,
+            retry_context,
+            settings,
+            recursion_limit=settings.deep_agent_recursion_limit,
+        )
+
+    return _run_staging_agent(
+        graph_state,
+        run_agent,
+        artifact_name="agentic_patch.diff",
+        partial_artifact_prefix="partial_deep_patch_round",
+        no_edits_reason="Deep Patch Agent made no edits.",
+        failure_label="Deep Patch Agent",
+    )
+
+
+def _run_staging_agent(
+    graph_state: RepairGraphState,
+    run_agent: Callable[[str], None],
+    *,
+    artifact_name: str,
+    partial_artifact_prefix: str,
+    no_edits_reason: str,
+    failure_label: str,
+) -> RepairGraphState:
+    """Run a bounded staging editor with ADR-0012 failure degradation."""
+    state = graph_state["state"]
+    settings = graph_state["settings"]
+    from agent.nodes.workflow import _attempt_dir
+
+    rounds = 1 + settings.llm_failure_node_retries
+    last_error: str | None = None
+    diff_text = ""
+    succeeded = False
+    for round_no in range(1, rounds + 1):
+        staging_path = Path(tempfile.mkdtemp(prefix=f"bsp-agent-{state.run_id}-"))
+        try:
+            staging_path.rmdir()
+        except OSError:
+            pass
+        staging = str(staging_path)
+        failed = False
+        try:
+            add_worktree(state.repo_path, staging)
+            run_agent(staging)
+            diff_text = diff_worktree(staging)
+        except LLMError as exc:
+            last_error = str(exc)
+            failed = True
+            try:
+                partial = diff_worktree(staging)
+            except Exception:
+                partial = ""
+            if partial.strip():
+                write_text(
+                    _attempt_dir(state)
+                    / "debug"
+                    / f"{partial_artifact_prefix}{round_no}.diff",
+                    partial,
+                )
+        finally:
+            remove_worktree(state.repo_path, staging)
+            shutil.rmtree(staging, ignore_errors=True)
+        if not failed:
+            succeeded = True
+            break
+        if round_no < rounds:
+            time.sleep(settings.llm_failure_retry_delay_sec)
+
+    if not succeeded:
+        state.failure_reason = (
+            f"{failure_label} LLM unavailable after {rounds} round(s): {last_error}"
+        )
+        _save_state(state)
+        return {
+            "state": state,
+            "diff_text": "",
+            "no_patch_reason": None,
+            "patch_format": "diff",
+        }
+
+    state.failure_reason = None
+    if not diff_text.strip():
+        _save_state(state)
+        return {
+            "state": state,
+            "diff_text": "NO_PATCH",
+            "no_patch_reason": no_edits_reason,
+            "patch_format": "diff",
+        }
+    write_text(_attempt_dir(state) / artifact_name, diff_text)
+    _save_state(state)
+    return {
+        "state": state,
+        "diff_text": diff_text,
+        "no_patch_reason": None,
+        "patch_format": "diff",
     }
 
 

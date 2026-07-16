@@ -47,9 +47,13 @@ def _resolve_file(path: str) -> Path:
     return resolved
 
 
-@tool
-def edit_file(path: str, search: str, replace: str, replace_all: bool = False) -> str:
-    """Replace exact text in a file under the current editable staging repo."""
+def replace_in_editable_repo(
+    path: str,
+    search: str,
+    replace: str,
+    replace_all: bool = False,
+) -> str:
+    """Replace exact text in the scoped staging repo without raising into an agent loop."""
     try:
         file_path = _resolve_file(path)
         content = file_path.read_text(errors="replace", encoding="utf-8")
@@ -63,3 +67,9 @@ def edit_file(path: str, search: str, replace: str, replace_all: bool = False) -
         return f"(ok: replaced {count if replace_all else 1})"
     except Exception as exc:  # noqa: BLE001
         return f"(error: {exc})"
+
+
+@tool
+def edit_file(path: str, search: str, replace: str, replace_all: bool = False) -> str:
+    """Replace exact text in a file under the current editable staging repo."""
+    return replace_in_editable_repo(path, search, replace, replace_all)

@@ -23,8 +23,10 @@ under `runs/<run_id>/attempts/<n>/`.
 | `classify_error` (det.) | `issue`, `logs_text`, `known_error_patterns.yaml` | `bug_type`, `error_signatures`, `suspected_areas`; `debug/error_classification.json` |
 | `select_skills` (LLM) | classification, full skill **catalog metadata** | `selected_skills` (≤ `max_selected_skills`, =3); `skill_selection.json`, `selected_skills.json`. Fallback: `known_error_patterns.yaml` |
 | `load_skill` (det.) | `selected_skills`, `skills/` | `skill_text` = full `SKILL.md` of selected only; `debug/retrieved_skills.md` |
+| `retrieve_mic741_knowledge` (det. + optional LLM rerank) | `issue`, logs, MIC-741 PostgreSQL cases | bounded repair knowledge context; `mic741_knowledge.md`, optional `debug/mic741_rerank.json` |
 | `inspect_repo` (det. **or** ReAct · ADR-0006) | `repo_path`, `issue`, `selected_skills` | `repo_inspection.md`. Mode A (default, flag OFF): deterministic rg keyword search + safe read. Mode B (`REACT_EVIDENCE_ENABLED`): bounded read-only ReAct evidence agent (LLM) loops `grep_repo`/`read_file`, writes `## Findings` + `## Investigation` trace (no diff) |
 | `patch_agent` (LLM) | `issue`, `skill_text`, `repo_inspection`, **retry context** | unified `diff_text` **or** `NO_PATCH`; `proposed_patch_prompt.md`, `proposed_patch_raw.md` |
+| `deep_patch_agent` (Deep Agents, experimental · ADR-0016) | `issue`, `skill_text`, MIC-741 knowledge, retry context, staging worktree | Replaces `inspect_repo` + `patch_agent` when `DEEP_AGENT_ENABLED=true`; plans, explores, delegates read-only research, edits staging, and returns its real git diff or `NO_PATCH` |
 | `validate_patch` (det.) | `diff_text` | normalized diff + `git apply --check` (**not applied**); on ok → `patch.md`, `changed_files`, `patch_status=generated`; on fail → `no_patch_reason` |
 | `code_review_agent` (LLM) | `issue`, selected skill **names**, `repo_inspection`, `diff_text`, `code_review_policy.md`, retry context | strict JSON `{decision, confidence, findings, required_changes}`; `code_review.md`, `review_agent_raw.json`. Fail-safe → `needs_human`. **Never auto-approves — pass still routes to `human_review`** |
 | `human_review` (human) | `patch.md`, `code_review.md`, attempt status | `approve` **or** `reject + feedback` (LangGraph `interrupt`, resumed by CLI) |
@@ -47,6 +49,7 @@ The decision diamonds map 1:1 to the routing functions in `agent/graph.py`:
 
 | Diamond | Source function | Branches |
 |---|---|---|
+| `Deep Agent enabled?` | `route_after_knowledge_retrieval` | false → `inspect_repo`; true → `deep_patch_agent` |
 | `diff?` | `route_after_patch_agent` | `diff` → `validate_patch`; `NO_PATCH` → `write_no_patch` |
 | `git apply --check ok?` | `route_after_validate_patch` | valid → `code_review_agent`; invalid → `write_no_patch` |
 | `review decision?` | `route_after_code_review` | **reject (retries left) → `classify_error`**; pass / needs_human / reject-exhausted → `human_review`. Human approval is always required — there is no auto-approve path |

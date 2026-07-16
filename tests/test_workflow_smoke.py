@@ -6,8 +6,10 @@ from agent.config import Settings
 from agent import run_lock
 from agent.graph import (
     apply_patch_node,
+    deep_patch_agent_node,
     human_review_node,
     patch_agent_node,
+    route_after_knowledge_retrieval,
     validate_patch_node,
     write_no_patch_node,
 )
@@ -58,6 +60,7 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "code_review_enabled": "CODE_REVIEW_ENABLED",
         "react_evidence_enabled": "REACT_EVIDENCE_ENABLED",
         "patch_agent_agentic": "PATCH_AGENT_AGENTIC",
+        "deep_agent_enabled": "DEEP_AGENT_ENABLED",
         "mic741_knowledge_enabled": "MIC741_KNOWLEDGE_ENABLED",
         "mic741_knowledge_db_url": "MIC741_KNOWLEDGE_DB_URL",
         "mic741_rerank_enabled": "MIC741_RERANK_ENABLED",
@@ -82,6 +85,7 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "AUTO_PUSH_ENABLED": False,
         "REACT_EVIDENCE_ENABLED": False,
         "PATCH_AGENT_AGENTIC": False,
+        "DEEP_AGENT_ENABLED": False,
         "MIC741_KNOWLEDGE_ENABLED": False,
         "MIC741_KNOWLEDGE_DB_URL": "",
         "MIC741_RERANK_ENABLED": True,
@@ -902,6 +906,121 @@ def test_patch_agent_node_agentic_no_edits_routes_no_patch(tmp_path: Path, monke
     assert result["no_patch_reason"] == "Agentic patch agent made no edits."
     assert result["patch_format"] == "diff"
     assert not staging.exists()
+
+
+def test_knowledge_routing_selects_deep_agent_only_when_enabled(tmp_path: Path) -> None:
+    legacy = make_settings(tmp_path)
+    deep = make_settings(tmp_path, DEEP_AGENT_ENABLED=True)
+
+    assert route_after_knowledge_retrieval({"settings": legacy}) == "inspect_repo"
+    assert route_after_knowledge_retrieval({"settings": deep}) == "deep_patch_agent"
+
+
+def test_deep_patch_agent_generates_diff_and_cleans_staging(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = make_repo(tmp_path)
+    settings = make_settings(tmp_path, DEEP_AGENT_ENABLED=True)
+    staging = tmp_path / "deep-agent-staging"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="deep_patch_agent",
+        issue="camera failed",
+    )
+    state.new_attempt()
+    state.save()
+
+    def fake_run_deep_patch_agent(staging_path, *args, **kwargs):
+        path = Path(staging_path) / "board.dts"
+        path.write_text('status = "okay";\n', encoding="utf-8")
+
+    monkeypatch.setattr("agent.graph.tempfile.mkdtemp", lambda prefix: str(staging))
+    monkeypatch.setattr(
+        "agent.tools.deep_patch_agent.run_deep_patch_agent",
+        fake_run_deep_patch_agent,
+    )
+
+    result = deep_patch_agent_node(
+        {
+            "state": state,
+            "settings": settings,
+            "skill_text": "camera skill",
+            "knowledge_context": "past camera repair",
+        }
+    )
+
+    assert result["patch_format"] == "diff"
+    assert result["no_patch_reason"] is None
+    assert '+status = "okay";' in result["diff_text"]
+    assert not staging.exists()
+    assert (repo / "board.dts").read_text(encoding="utf-8") == 'status = "disabled";\n'
+    artifact = Path(state.run_dir) / "attempts" / "001" / "agentic_patch.diff"
+    assert artifact.exists()
+
+
+def test_deep_patch_agent_no_edits_routes_no_patch(tmp_path: Path, monkeypatch) -> None:
+    repo = make_repo(tmp_path)
+    settings = make_settings(tmp_path, DEEP_AGENT_ENABLED=True)
+    staging = tmp_path / "deep-agent-staging-empty"
+    state = BSPAgentState(
+        run_id="run123",
+        repo_path=str(repo),
+        run_dir=str(tmp_path / "runs" / "run123"),
+        stage="deep_patch_agent",
+        issue="camera failed",
+    )
+    state.new_attempt()
+    state.save()
+
+    monkeypatch.setattr("agent.graph.tempfile.mkdtemp", lambda prefix: str(staging))
+    monkeypatch.setattr(
+        "agent.tools.deep_patch_agent.run_deep_patch_agent",
+        lambda *args, **kwargs: None,
+    )
+
+    result = deep_patch_agent_node({"state": state, "settings": settings})
+
+    assert result["diff_text"] == "NO_PATCH"
+    assert result["no_patch_reason"] == "Deep Patch Agent made no edits."
+    assert result["patch_format"] == "diff"
+    assert not staging.exists()
+
+
+def test_deep_agent_full_graph_reaches_existing_human_review_gate(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = make_repo(tmp_path)
+    settings = make_settings(tmp_path, DEEP_AGENT_ENABLED=True)
+    fake = dispatch_fake([PATCH_OKAY], [REVIEW_PASS])
+    patch_llm(monkeypatch, fake)
+
+    def fake_run_deep_patch_agent(staging_path, *args, **kwargs):
+        (Path(staging_path) / "board.dts").write_text('status = "okay";\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "agent.tools.deep_patch_agent.run_deep_patch_agent",
+        fake_run_deep_patch_agent,
+    )
+
+    state = create_run(
+        repo=repo,
+        issue="camera probe failed",
+        logs=[make_log(tmp_path)],
+        settings=settings,
+    )
+
+    assert state.stage == "human_review"
+    assert state.current_attempt.patch_status == "generated"
+    assert state.current_attempt.code_review_decision == "pass"
+    attempt_dir = Path(state.run_dir) / "attempts" / "001"
+    assert (attempt_dir / "agentic_patch.diff").exists()
+    assert not (attempt_dir / "deep_agent_patch.diff").exists()
+    assert (attempt_dir / "patch.md").exists()
+    assert not (attempt_dir / "repo_inspection.md").exists()
+    assert fake.calls["patch"] == 0
+    assert (repo / "board.dts").read_text(encoding="utf-8") == 'status = "disabled";\n'
 
 
 def test_code_review_reject_auto_retries(tmp_path: Path, monkeypatch) -> None:
