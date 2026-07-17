@@ -24,10 +24,19 @@ def _get_model() -> SentenceTransformer:
     if _model is None:
         from pathlib import Path
 
-        # ONNX Runtime backend: 5-10x faster than PyTorch CPU, no GPU required.
-        # First call exports the model to ONNX (~46s), subsequent loads are instant.
+        # ONNX Runtime backend: uses CUDAExecutionProvider when available, CPUExecutionProvider otherwise.
+        # First call exports the model to ONNX (~46s), subsequent loads are 3-4s.
         model_path = _resolve_model_path()
-        _model = SentenceTransformer(model_path, backend="onnx")
+        import onnxruntime as ort
+        _providers = ort.get_available_providers()
+        # Prefer CUDA; skip TensorRT (needs separate TensorRT libraries).
+        _provider = "CUDAExecutionProvider" if "CUDAExecutionProvider" in _providers else "CPUExecutionProvider"
+        _device = "cuda" if _provider == "CUDAExecutionProvider" else "cpu"
+        _model = SentenceTransformer(
+            model_path, backend="onnx",
+            model_kwargs={"provider": _provider},
+            device=_device,
+        )
         # Truncate to 512 tokens; longer texts cause OOM in ONNX attention matrix.
         _model.max_seq_length = 512
 

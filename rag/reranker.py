@@ -18,8 +18,10 @@ _model: "CrossEncoder | None" = None
 def _get_model(model_name: str = "BAAI/bge-reranker-v2-m3") -> "CrossEncoder":
     global _model
     if _model is None:
+        import torch
         from sentence_transformers import CrossEncoder
-        _model = CrossEncoder(model_name, device="cpu")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _model = CrossEncoder(model_name, device=device)
     return _model
 
 
