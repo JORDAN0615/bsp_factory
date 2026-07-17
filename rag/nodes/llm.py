@@ -92,7 +92,12 @@ def _format_context(chunks) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
+def _strip_thinking(raw: str) -> str:
+    return re.sub(r'<think>[\s\S]*?</think>', '', raw, flags=re.IGNORECASE).strip()
+
+
 def _parse_kb_answer(raw: str) -> tuple[str, list[str]]:
+    raw = _strip_thinking(raw)
     match = re.search(r'\{[\s\S]*\}', raw)
     if match:
         try:

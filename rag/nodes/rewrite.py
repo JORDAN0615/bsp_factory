@@ -73,7 +73,7 @@ def rewrite_node(state: AgentState) -> dict:
                 max_retries=1,
             )
             result = llm.invoke([{"role": "user", "content": prompt}])
-            raw = str(result.content)
+            raw = re.sub(r'<think>[\s\S]*?</think>', '', str(result.content), flags=re.IGNORECASE).strip()
             match = re.search(r'\{[\s\S]*\}', raw)
             if match:
                 import json as _json

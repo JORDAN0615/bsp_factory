@@ -72,8 +72,14 @@ def _build_fallback(raw_input: str) -> dict:
     }
 
 
+def _strip_thinking(raw: str) -> str:
+    """Remove <think>...</think> blocks emitted by reasoning models (e.g. minimax, deepseek-r1)."""
+    return re.sub(r'<think>[\s\S]*?</think>', '', raw, flags=re.IGNORECASE).strip()
+
+
 def _parse_query_object(raw: str) -> dict | None:
     """Extract and validate JSON from LLM output."""
+    raw = _strip_thinking(raw)
     match = re.search(r'\{[\s\S]*\}', raw)
     if not match:
         return None

@@ -89,19 +89,46 @@ def run_test(case: dict, settings, verbose: bool = True) -> bool:
         result = retrieve_rag_crag_node(graph_state)
 
         knowledge_context = result.get("knowledge_context", case["existing_fts_context"])
-        rag_debug = (run_dir / "test-run-001" / "attempts" / "001" / "debug" / "rag_crag_context.md")
 
+        # ── Checks ────────────────────────────────────────────────────────────
+        failures = []
+
+        # 1. knowledge_context must be populated and differ from the pre-existing FTS context
         if not knowledge_context or knowledge_context == case["existing_fts_context"]:
-            print("FAIL — knowledge_context not populated by RAG")
+            failures.append("knowledge_context not populated by RAG")
+
+        # 2. Must not contain an LLM error (LLM must have connected successfully)
+        if knowledge_context and "LLM" in knowledge_context and "失敗" in knowledge_context:
+            failures.append("LLM call failed — knowledge_context contains error message")
+
+        # 3. Must contain either a root cause or fix steps (real LLM output)
+        has_llm_output = knowledge_context and (
+            "根本原因" in knowledge_context or "修復步驟" in knowledge_context
+            or "root_cause" in knowledge_context or "fix_steps" in knowledge_context
+        )
+        if not failures and not has_llm_output:
+            failures.append("No LLM diagnosis found — LLM node may have been skipped or failed silently")
+
+        # 4. Must contain at least one expected keyword from error_signatures
+        has_keyword = any(
+            kw.lower() in (knowledge_context or "").lower()
+            for kw in case["error_signatures"]
+        )
+        if not has_keyword:
+            failures.append(f"No error-signature keyword found in context: {case['error_signatures']}")
+
+        if failures:
+            for f in failures:
+                print(f"  FAIL — {f}")
             return False
 
         lines = knowledge_context.strip().splitlines()
-        print(f"OK — knowledge_context: {len(lines)} lines")
+        print(f"  OK — knowledge_context: {len(lines)} lines, LLM output present, keywords matched")
         if verbose:
-            preview = "\n".join(lines[:15])
-            print(f"\n--- Context preview (first 15 lines) ---\n{preview}")
-            if len(lines) > 15:
-                print(f"... ({len(lines) - 15} more lines)")
+            preview = "\n".join(lines[:20])
+            print(f"\n--- Context preview ---\n{preview}")
+            if len(lines) > 20:
+                print(f"... ({len(lines) - 20} more lines)")
 
         return True
 

@@ -3,9 +3,12 @@ import os
 # ── LLM ─────────────────────────────────────────────────────────────
 LLM_CONFIG = {
     "base_url": os.getenv("OPENAI_BASE_URL") or os.getenv("LLM_BASE_URL", "http://172.17.5.206:8002/v1"),
-    "model": os.getenv("MODEL_NAME") or os.getenv("LLM_MODEL", "qwen3-6-35b-a3b"),
-    "api_key": os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY", "fake-key"),
+    "model": os.getenv("MODEL_NAME") or os.getenv("LLM_MODEL", "minimax-m2.5-nvfp4"),
+    "api_key": os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY", "dummy"),
     "temperature": float(os.getenv("LLM_TEMPERATURE", "0")),
+    # Reasoning models (minimax, qwq, deepseek-r1) output long chain-of-thought before responding.
+    # 300s covers even complex BSP queries; increase LLM_TIMEOUT env var if still hitting timeouts.
+    "timeout": int(os.getenv("LLM_TIMEOUT", "300")),
 }
 
 # Qdrant persistent storage path
