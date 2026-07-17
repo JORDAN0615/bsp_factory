@@ -158,9 +158,14 @@ def load_index_from_cache() -> dict | None:
     if payload.get("version") != CACHE_VERSION:
         return None
 
-    # Checksum check
+    # Checksum check — use MIC741_KNOWLEDGE_SOURCE_DIR if set (agent context),
+    # else fall back to KB_DIR env var, else default relative to project root.
     import os
-    kb_path = Path(__file__).parent.parent / os.getenv("KB_DIR", "MIC-741_KnowledgeBase")
+    mic741_dir = os.getenv("MIC741_KNOWLEDGE_SOURCE_DIR")
+    if mic741_dir:
+        kb_path = Path(mic741_dir)
+    else:
+        kb_path = Path(__file__).parent.parent / os.getenv("KB_DIR", "MIC-741_KnowledgeBase")
     stored_cs = payload.get("checksum", "?")
     current_cs = _data_checksum(kb_path)
     if stored_cs != current_cs:

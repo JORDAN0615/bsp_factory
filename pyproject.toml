@@ -31,6 +31,9 @@ dependencies = [
   "sentence-transformers>=3.0.0",
   "rank-bm25>=0.2.2",
   "neo4j>=5.0.0",
+  # ONNX Runtime for fast CPU inference (replaces slow PyTorch CPU embedding)
+  "onnxruntime>=1.18.0",
+  "optimum[onnxruntime]>=1.18.0",
 ]
 
 [project.optional-dependencies]

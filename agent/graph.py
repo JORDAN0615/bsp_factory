@@ -342,7 +342,8 @@ def retrieve_rag_crag_node(graph_state: RepairGraphState) -> RepairGraphState:
     rag_context = ""
     try:
         from rag.rag_graph import build_rag_graph, ensure_local_index
-        ensure_local_index(kb_dir=settings.mic741_knowledge_source_dir)
+        kb_dir = Path(settings.mic741_knowledge_source_dir).resolve()
+        ensure_local_index(kb_dir=kb_dir)
         result = build_rag_graph().invoke({"original_input": query, "route": "kb"})
         rag_context = result.get("rag_context", "")
     except Exception as exc:

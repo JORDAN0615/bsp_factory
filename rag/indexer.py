@@ -126,7 +126,7 @@ def build_index(*, force: bool = False, kb_dir: Path | None = None) -> list[Chun
         except Exception:
             pass
 
-    # Generate embeddings in batches (batch_size=8 to avoid GPU OOM on 4GB VRAM)
+    # batch_size=8: bge-m3's attention tensor is large; higher values exhaust RAM on CPU
     vectors = embed_batch([c.text for c in chunks], batch_size=8)
 
     # Init + upsert into Qdrant
