@@ -69,6 +69,24 @@ def test_build_deep_patch_agent_uses_stable_harness_api(tmp_path: Path) -> None:
     assert "tools" in agent.get_graph().nodes
 
 
+def test_skill_tools_list_and_load_record_selection(tmp_path: Path) -> None:
+    from agent.tools.deep_patch_agent import _build_skill_tools
+
+    loaded: list[str] = []
+    list_skills, load_skill = _build_skill_tools(make_settings(tmp_path), loaded)
+
+    catalog = list_skills.invoke({})
+    assert "jetson-build-source" in catalog  # real skill folder under skills/
+
+    text = load_skill.invoke({"name": "jetson-build-source"})
+    assert "Build BSP Source" in text
+    assert loaded == ["jetson-build-source"]  # load_skill records what the agent read
+
+    missing = load_skill.invoke({"name": "does-not-exist"})
+    assert "error" in missing
+    assert loaded == ["jetson-build-source"]  # a failed load is not recorded
+
+
 def test_deep_patch_agent_denies_builtin_file_creation(tmp_path: Path, monkeypatch) -> None:
     staging = make_staging(tmp_path)
 
@@ -113,6 +131,16 @@ def test_deep_patch_agent_denies_builtin_file_creation(tmp_path: Path, monkeypat
     tool_results = [message for message in result["messages"] if isinstance(message, ToolMessage)]
     assert tool_results
     assert "permission" in str(tool_results[0].content).lower()
+
+
+def test_route_after_classify_error_skips_skill_nodes_on_deep_path(tmp_path: Path) -> None:
+    from agent.graph import route_after_classify_error
+
+    deep = Settings(DEEP_AGENT_ENABLED=True, runs_dir=tmp_path / "runs")
+    legacy = Settings(DEEP_AGENT_ENABLED=False, runs_dir=tmp_path / "runs")
+
+    assert route_after_classify_error({"settings": deep}) == "retrieve_mic741_knowledge"
+    assert route_after_classify_error({"settings": legacy}) == "select_skills"
 
 
 def test_run_deep_patch_agent_fake_harness_edits_staging(

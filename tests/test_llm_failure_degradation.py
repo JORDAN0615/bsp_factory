@@ -19,7 +19,7 @@ from agent.nodes.workflow import abandon_run, retry_run
 from agent.state import BSPAgentState, RepairAttempt
 from agent.tools.llm_tools import LLMError, transient_llm_errors
 
-from tests.test_workflow_smoke import make_repo, make_settings
+from test_workflow_smoke import make_repo, make_settings
 
 
 # --- classification / settings -------------------------------------------------

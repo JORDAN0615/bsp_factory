@@ -70,10 +70,16 @@ def _render_attempt(state: BSPAgentState, attempt: RepairAttempt) -> str:
         lines.append(
             f"- No-patch / failure reason: {_one_line(no_patch_reason, _FEEDBACK_MAX_CHARS)}"
         )
+    if attempt.build_status:
+        lines.append(f"- Target build ({attempt.build_scope or 'full'}): `{attempt.build_status}`")
     lines.append("")
     patch_excerpt = _patch_excerpt(path)
     if patch_excerpt:
         lines.extend(["Patch excerpt:", "", "```diff", patch_excerpt, "```", ""])
+    if attempt.build_status == "failed":
+        build_tail = _tail_summary(attempt.build_log_path)
+        if build_tail:
+            lines.extend(["Build failure (fix this before re-editing):", "", "```text", build_tail, "```", ""])
     for run in attempt.validation_runs:
         lines.extend(_render_validation(run))
     return "\n".join(lines).rstrip() + "\n"

@@ -18,6 +18,7 @@ Stage = Literal[
     "propose_patch",
     "validate_patch",
     "code_review",
+    "target_build",
     "apply_patch",
     "publish",
     "published",
@@ -33,6 +34,7 @@ Stage = Literal[
 
 
 PatchStatus = Literal["not_generated", "generated", "applied", "no_patch", "failed"]
+BuildStatus = Literal["success", "failed"]
 ReviewStatus = Literal["pending", "approved", "rejected"]
 CodeReviewDecision = Literal["pass", "reject", "needs_human"]
 ValidationStatus = Literal["pending", "running", "success", "failed"]
@@ -75,6 +77,9 @@ class RepairAttempt(BaseModel):
     code_review_confidence: float | None = None
     code_review_findings: list[str] = Field(default_factory=list)
     code_review_required_changes: list[str] = Field(default_factory=list)
+    build_status: BuildStatus | None = None
+    build_scope: str | None = None
+    build_log_path: str | None = None
     publish_status: PublishStatus | None = None
     published_branch: str | None = None
     published_commit: str | None = None

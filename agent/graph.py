@@ -63,6 +63,8 @@ class RepairGraphState(TypedDict, total=False):
     no_patch_route: str
     review_agent_route: str
     review_route: str
+    build_route: str
+    guide_text: str
 
 
 def build_repair_graph(checkpointer=None):
@@ -73,16 +75,25 @@ def build_repair_graph(checkpointer=None):
     graph.add_node("retrieve_mic741_knowledge", retrieve_mic741_knowledge_node)
     graph.add_node("inspect_repo", inspect_repo_node)
     graph.add_node("patch_agent", patch_agent_node)
+    graph.add_node("deep_planner", deep_planner_node)
     graph.add_node("deep_patch_agent", deep_patch_agent_node)
     graph.add_node("write_no_patch", write_no_patch_node)
     graph.add_node("validate_patch", validate_patch_node)
     graph.add_node("code_review_agent", code_review_agent_node)
+    graph.add_node("target_build", target_build_node)
     graph.add_node("human_review", human_review_node)
     graph.add_node("apply_patch", apply_patch_node)
     graph.add_node("publish", publish_node)
 
     graph.add_edge(START, "classify_error")
-    graph.add_edge("classify_error", "select_skills")
+    graph.add_conditional_edges(
+        "classify_error",
+        route_after_classify_error,
+        {
+            "select_skills": "select_skills",
+            "retrieve_mic741_knowledge": "retrieve_mic741_knowledge",
+        },
+    )
     graph.add_edge("select_skills", "load_skill")
     graph.add_edge("load_skill", "retrieve_mic741_knowledge")
     graph.add_conditional_edges(
@@ -91,6 +102,15 @@ def build_repair_graph(checkpointer=None):
         {
             "inspect_repo": "inspect_repo",
             "deep_patch_agent": "deep_patch_agent",
+            "deep_planner": "deep_planner",
+        },
+    )
+    graph.add_conditional_edges(
+        "deep_planner",
+        route_after_planner,
+        {
+            "deep_patch_agent": "deep_patch_agent",
+            "human_review": "human_review",
         },
     )
     graph.add_edge("inspect_repo", "patch_agent")
@@ -136,6 +156,15 @@ def build_repair_graph(checkpointer=None):
         {
             "classify_error": "classify_error",
             "human_review": "human_review",
+            "target_build": "target_build",
+        },
+    )
+    graph.add_conditional_edges(
+        "target_build",
+        route_after_target_build,
+        {
+            "human_review": "human_review",
+            "classify_error": "classify_error",
         },
     )
     graph.add_conditional_edges(
@@ -168,6 +197,7 @@ def run_repair_graph(state: BSPAgentState, settings: Settings) -> BSPAgentState:
                         "logs_text": logs_text,
                         "skill_text": "",
                         "knowledge_context": "",
+                        "guide_text": "",
                         "repo_inspection": "",
                         "diff_text": "",
                         "no_patch_reason": None,
@@ -219,6 +249,17 @@ def classify_error_node(graph_state: RepairGraphState) -> RepairGraphState:
     write_json(_attempt_dir(state) / "debug" / "error_classification.json", classification)
     _save_state(state)
     return {"state": state}
+
+
+def route_after_classify_error(
+    graph_state: RepairGraphState,
+) -> Literal["select_skills", "retrieve_mic741_knowledge"]:
+    # Deep agent discovers skills itself via list_skills/load_skill (ADR-0017),
+    # so the deep path skips the deterministic select/load nodes. The legacy path
+    # keeps them. MIC-741 knowledge is preloaded on both paths (unchanged).
+    if graph_state["settings"].deep_agent_enabled:
+        return "retrieve_mic741_knowledge"
+    return "select_skills"
 
 
 def select_skills_node(graph_state: RepairGraphState) -> RepairGraphState:
@@ -320,10 +361,74 @@ def retrieve_mic741_knowledge_node(graph_state: RepairGraphState) -> RepairGraph
 
 def route_after_knowledge_retrieval(
     graph_state: RepairGraphState,
-) -> Literal["inspect_repo", "deep_patch_agent"]:
-    if graph_state["settings"].deep_agent_enabled:
-        return "deep_patch_agent"
-    return "inspect_repo"
+) -> Literal["inspect_repo", "deep_patch_agent", "deep_planner"]:
+    settings = graph_state["settings"]
+    if not settings.deep_agent_enabled:
+        return "inspect_repo"
+    # A cloud planner decides the fix first, then the local executor implements it
+    # (ADR-0020). Off by default -> the executor runs on its own as in ADR-0017.
+    if settings.planner_enabled:
+        return "deep_planner"
+    return "deep_patch_agent"
+
+
+def deep_planner_node(graph_state: RepairGraphState) -> RepairGraphState:
+    """Cloud planner: decide the fix and emit a guide for the local executor (ADR-0020).
+
+    Transient cloud failures use the ADR-0012 ladder (bounded in-node retries, then
+    pause at human_review); it does not fall back to local-only, which is the
+    proven-weak path.
+    """
+    state = graph_state["state"]
+    settings = graph_state["settings"]
+    state.stage = "deep_patch_agent"
+    _save_state(state)
+    from agent.nodes.workflow import _attempt_dir
+    from agent.tools.planner_agent import run_planner_agent
+    from agent.tools.retry_tools import build_retry_context
+
+    knowledge_context = graph_state.get("knowledge_context", "")
+    retry_context = build_retry_context(state)
+
+    rounds = 1 + settings.llm_failure_node_retries
+    guide = ""
+    last_error: str | None = None
+    succeeded = False
+    for round_no in range(1, rounds + 1):
+        try:
+            guide = run_planner_agent(
+                state.repo_path,
+                state.issue,
+                knowledge_context,
+                retry_context,
+                settings,
+                recursion_limit=settings.planner_recursion_limit,
+            )
+            succeeded = True
+            break
+        except LLMError as exc:
+            last_error = str(exc)
+            if round_no < rounds:
+                time.sleep(settings.llm_failure_retry_delay_sec)
+
+    if not succeeded:
+        state.failure_reason = f"Planner (cloud) unavailable after {rounds} round(s): {last_error}"
+        _save_state(state)
+        return {"state": state, "guide_text": "", "build_route": "human_review"}
+
+    state.failure_reason = None
+    if guide.strip():
+        write_text(_attempt_dir(state) / "guide.md", guide)
+    _save_state(state)
+    return {"state": state, "guide_text": guide}
+
+
+def route_after_planner(
+    graph_state: RepairGraphState,
+) -> Literal["deep_patch_agent", "human_review"]:
+    if graph_state["state"].failure_reason:
+        return "human_review"
+    return "deep_patch_agent"
 
 
 def inspect_repo_node(graph_state: RepairGraphState) -> RepairGraphState:
@@ -429,7 +534,9 @@ def deep_patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
 
     skill_text = graph_state.get("skill_text", "")
     knowledge_context = graph_state.get("knowledge_context", "")
+    guide = graph_state.get("guide_text", "")
     retry_context = build_retry_context(state)
+    loaded_skills: list[str] = []
 
     def run_agent(staging: str) -> None:
         run_deep_patch_agent(
@@ -440,9 +547,11 @@ def deep_patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
             retry_context,
             settings,
             recursion_limit=settings.deep_agent_recursion_limit,
+            loaded_skills=loaded_skills,
+            guide=guide,
         )
 
-    return _run_staging_agent(
+    out = _run_staging_agent(
         graph_state,
         run_agent,
         artifact_name="agentic_patch.diff",
@@ -450,6 +559,16 @@ def deep_patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
         no_edits_reason="Deep Patch Agent made no edits.",
         failure_label="Deep Patch Agent",
     )
+    # The agent chose its own skills via list_skills/load_skill (ADR-0017); record
+    # them (deduped, order-preserving) so review/reporting still sees selected_skills.
+    if loaded_skills:
+        from agent.nodes.workflow import _attempt_dir
+
+        deduped = list(dict.fromkeys(loaded_skills))
+        state.current_attempt.selected_skills = deduped
+        write_json(_attempt_dir(state) / "selected_skills.json", deduped)
+        _save_state(state)
+    return out
 
 
 def _run_staging_agent(
@@ -663,9 +782,74 @@ def code_review_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
 
 def route_after_code_review(
     graph_state: RepairGraphState,
-) -> Literal["classify_error", "human_review"]:
+) -> Literal["classify_error", "human_review", "target_build"]:
     route = graph_state.get("review_agent_route")
     if route == "classify_error":
+        return "classify_error"
+    # A code-review pass goes through the automated build gate first when enabled,
+    # so a human only ever reviews patches that already build (ADR-0019).
+    if graph_state["settings"].target_build_enabled:
+        return "target_build"
+    return "human_review"
+
+
+def target_build_node(graph_state: RepairGraphState) -> RepairGraphState:
+    """Build the patched tree as an automated gate before human review (ADR-0019).
+
+    Builds a throwaway staging worktree (the real tree stays clean until human
+    approval). A build failure routes back to a new attempt with the build log as
+    retry context so the deep agent learns from the compiler/boot error; a build
+    that cannot even start pauses for a human instead of burning attempts.
+    """
+    state = graph_state["state"]
+    settings = graph_state["settings"]
+    attempt = state.current_attempt
+    state.stage = "target_build"
+    _save_state(state)
+    from agent.nodes.workflow import _attempt_dir
+    from agent.tools.bsp_build import run_bsp_build
+
+    scope = settings.build_default_scope
+    result = run_bsp_build(
+        state.repo_path,
+        graph_state.get("diff_text", ""),
+        scope,
+        settings,
+        log_path=_attempt_dir(state) / "build.log",
+    )
+    attempt.build_scope = scope
+    attempt.build_status = "success" if result.ok else "failed"
+    attempt.build_log_path = str(result.log_path)
+    _save_state(state)
+
+    if result.ok:
+        return {"state": state, "build_route": "human_review"}
+    if not result.ran:
+        # Infrastructure failure (missing entrypoint, timeout): pause for a human
+        # rather than spend a repair attempt on something the agent cannot fix.
+        state.failure_reason = (
+            f"Target build could not start (exit {result.returncode}); see build.log."
+        )
+        _save_state(state)
+        return {"state": state, "build_route": "human_review"}
+    if len(state.attempts) >= state.max_loops:
+        # Built and failed, but no retry budget left: escalate to human review.
+        return {"state": state, "build_route": "human_review"}
+    state.new_attempt()
+    state.stage = "classify_error"
+    _save_state(state)
+    return {
+        "state": state,
+        "build_route": "classify_error",
+        "no_patch_reason": None,
+        "diff_text": "",
+    }
+
+
+def route_after_target_build(
+    graph_state: RepairGraphState,
+) -> Literal["human_review", "classify_error"]:
+    if graph_state.get("build_route") == "classify_error":
         return "classify_error"
     return "human_review"
 
