@@ -21,7 +21,7 @@ def _get_model(model_name: str = "BAAI/bge-reranker-v2-m3") -> "CrossEncoder":
         import torch
         from sentence_transformers import CrossEncoder
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        _model = CrossEncoder(model_name, device=device)
+        _model = CrossEncoder(model_name, device=device, max_length=512)
     return _model
 
 
@@ -49,8 +49,18 @@ def rerank(query: str, chunks: list["Chunk"], top_k: int = 5) -> list["Chunk"]:
     except ImportError:
         return chunks[:top_k]
 
-    pairs = [(query, c.text) for c in chunks]
-    raw_scores = model.predict(pairs, convert_to_numpy=True)
+    # Truncate text to prevent GPU OOM on long chunks (4GB VRAM limit)
+    MAX_TEXT_CHARS = 1200
+    pairs = [(query, c.text[:MAX_TEXT_CHARS]) for c in chunks]
+    raw_scores = model.predict(pairs, convert_to_numpy=True, batch_size=4)
+
+    # Release GPU cache after prediction to avoid VRAM accumulation across calls
+    try:
+        import torch as _torch
+        if _torch.cuda.is_available():
+            _torch.cuda.empty_cache()
+    except Exception:
+        pass
     score_list = raw_scores.tolist() if hasattr(raw_scores, "tolist") else list(raw_scores)
 
     scored = sorted(zip(chunks, score_list), key=lambda x: x[1], reverse=True)
