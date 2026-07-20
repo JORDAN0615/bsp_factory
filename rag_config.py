@@ -19,14 +19,30 @@ QDRANT_PATH = os.getenv("QDRANT_PATH") or str(
 # Show retrieval debug info
 DEBUG_RETRIEVAL = os.getenv("DEBUG_RETRIEVAL", "1") == "1"
 
-# Max chunks returned after reranking
+# Max chunks returned after reranking (retrieval pool)
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
+
+# How many top chunks are actually sent to the LLM for diagnosis generation.
+# Reducing from 5→3 cuts context length by ~40%, speeds up LLM response noticeably.
+LLM_TOP_K_CHUNKS = int(os.getenv("LLM_TOP_K_CHUNKS", "3"))
+
+# Max chars per chunk sent to LLM. The reranker already truncates to 1200 chars
+# for scoring; here we truncate further for the LLM generation step only.
+# 400 chars ≈ one clear symptom description, sufficient for diagnosis.
+LLM_CHUNK_MAX_CHARS = int(os.getenv("LLM_CHUNK_MAX_CHARS", "400"))
 
 # CRAG: reranker score threshold to consider retrieval "good enough"
 CRAG_SCORE_THRESHOLD = float(os.getenv("CRAG_SCORE_THRESHOLD", "0.4"))
 
 # Max CRAG rewrite retries before emitting a Knowledge Gap Report
-CRAG_MAX_RETRIES = int(os.getenv("CRAG_MAX_RETRIES", "2"))
+# Lowered to 1 to avoid extra round-trips; set to 2 via env if deeper retry needed
+CRAG_MAX_RETRIES = int(os.getenv("CRAG_MAX_RETRIES", "1"))
+
+# Set to "1" to use LLM for input_planner query decomposition.
+# Default "0" uses enhanced rule-based parsing (saves ~30-60s per query).
+# Rule-based is sufficient for structured BSP error logs; enable LLM for
+# complex natural-language queries where keyword extraction is ambiguous.
+INPUT_PLANNER_USE_LLM = os.getenv("INPUT_PLANNER_USE_LLM", "0") == "1"
 
 # Neo4j entry-node list fed to Block A LLM Planner as a constraint
 NEO4J_ENTRY_NODES: list[str] = [
