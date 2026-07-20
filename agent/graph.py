@@ -347,8 +347,10 @@ def retrieve_rag_crag_node(graph_state: RepairGraphState) -> RepairGraphState:
         result = build_rag_graph().invoke({"original_input": query, "route": "kb"})
         rag_context = result.get("rag_context", "")
     except Exception as exc:
-        import logging
+        import logging, traceback
         logging.getLogger(__name__).warning("RAG CRAG unavailable: %s", exc)
+        print(f"\n[RAG DEBUG] exception caught: {exc}")
+        traceback.print_exc()
 
     write_text(
         _attempt_dir(state) / "debug" / "rag_crag_context.md",
