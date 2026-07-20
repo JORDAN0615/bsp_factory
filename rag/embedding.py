@@ -29,9 +29,15 @@ def _get_model() -> SentenceTransformer:
         model_path = _resolve_model_path()
         import onnxruntime as ort
         _providers = ort.get_available_providers()
-        # Prefer CUDA; skip TensorRT (needs separate TensorRT libraries).
-        _provider = "CUDAExecutionProvider" if "CUDAExecutionProvider" in _providers else "CPUExecutionProvider"
-        _device = "cuda" if _provider == "CUDAExecutionProvider" else "cpu"
+        # Use CUDAExecutionProvider only when PyTorch also has CUDA — both must agree on device.
+        # If PyTorch is CPU-only, ORT CUDA I/O still needs CUDA tensors → crash; fall back to CPU.
+        try:
+            import torch as _torch
+            _cuda_ok = _torch.cuda.is_available() and "CUDAExecutionProvider" in _providers
+        except Exception:
+            _cuda_ok = False
+        _provider = "CUDAExecutionProvider" if _cuda_ok else "CPUExecutionProvider"
+        _device = "cuda" if _cuda_ok else "cpu"
         _model = SentenceTransformer(
             model_path, backend="onnx",
             model_kwargs={"provider": _provider},
