@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 
-from rag_config import LLM_CONFIG, NEO4J_ENTRY_NODES, DEBUG_RETRIEVAL
+from rag_config import LLM_CONFIG, NEO4J_ENTRY_NODES, DEBUG_RETRIEVAL, INPUT_PLANNER_USE_LLM
 from rag.rag_state import AgentState
 
 _PLANNER_SYSTEM = "You are a BSP retrieval query planner. Output strict JSON only, no markdown fences."
@@ -59,15 +59,55 @@ _FALLBACK_QUERY = {
 
 
 def _build_fallback(raw_input: str) -> dict:
-    """Rule-based fallback when LLM is unavailable."""
-    words = raw_input.split()
-    keywords = [w for w in words if len(w) > 4 and not w.islower()][:10]
+    """Enhanced rule-based query decomposition (default path, no LLM needed).
+
+    Extracts BSP-relevant signals directly from structured error logs:
+    - Error codes (numeric, hex, -ERRNO)
+    - CamelCase / UPPER_CASE identifiers (driver names, components)
+    - snake_case function/symbol names
+    - Neo4j component hints from the known entry-node list
+    """
+    keywords: list[str] = []
+    seen: set[str] = set()
+
+    def _add(term: str) -> None:
+        t = term.strip()
+        if t and t not in seen and len(t) > 2:
+            seen.add(t)
+            keywords.append(t)
+
+    # Error codes: -121, errno style, hex addresses
+    for m in re.findall(r'(?:error|err|errno|code|ret|retval)[\s:=]+(-?\d+|0x[0-9a-fA-F]+)', raw_input, re.IGNORECASE):
+        _add(m)
+    for m in re.findall(r'\b0x[0-9a-fA-F]{4,}\b', raw_input):
+        _add(m)
+    # Standalone -NNN patterns common in kernel logs
+    for m in re.findall(r'\s(-\d{1,4})\b', raw_input):
+        _add(m)
+
+    # UPPER_CASE identifiers and CamelCase words (driver names, components)
+    for m in re.findall(r'\b[A-Z][A-Za-z0-9]{2,}\b|\b[A-Z]{2,}\b', raw_input):
+        if m not in {'The', 'This', 'That', 'When', 'After', 'With', 'From', 'Boot', 'Into', 'Over'}:
+            _add(m)
+
+    # snake_case symbols (kernel function names, device tree nodes, file paths)
+    for m in re.findall(r'\b[a-z][a-z0-9]*(?:_[a-z0-9]+){2,}\b', raw_input):
+        _add(m)
+
+    # Common BSP error phrases as bigrams
+    for m in re.findall(r'(?:probe failed|link down|not detected|out of memory|timeout|dmesg|ifconfig|lsusb|i2c transfer|cannot open)', raw_input, re.IGNORECASE):
+        _add(m)
+
+    # Build concise semantic query: first 200 chars, whitespace-normalised
+    semantic = re.sub(r'\s+', ' ', raw_input[:200]).strip()
+
     hints = [node for node in NEO4J_ENTRY_NODES
              if node.lower() in raw_input.lower()][:3]
+
     return {
-        "semantic_query": raw_input[:300],
+        "semantic_query": semantic,
         "filters": {},
-        "keywords": keywords,
+        "keywords": keywords[:18],
         "graph_hints": hints,
     }
 
@@ -106,31 +146,35 @@ def _parse_query_object(raw: str) -> dict | None:
 
 def input_planner_node(state: AgentState) -> dict:
     raw_input = state["original_input"]
-    node_list = ", ".join(f'"{n}"' for n in NEO4J_ENTRY_NODES)
-    prompt = _PLANNER_PROMPT.format(raw_input=raw_input, node_list=node_list)
 
     query_object = None
-    try:
-        from langchain_openai import ChatOpenAI
 
-        llm = ChatOpenAI(
-            **{k: v for k, v in LLM_CONFIG.items() if v and k != "temperature"},
-            temperature=0,
-            max_retries=1,
-        )
-        result = llm.invoke([
-            {"role": "system", "content": _PLANNER_SYSTEM},
-            {"role": "user", "content": prompt},
-        ])
-        query_object = _parse_query_object(str(result.content))
-    except Exception as e:
-        if DEBUG_RETRIEVAL:
-            print(f"\n[INPUT_PLANNER] LLM call failed: {e}")
+    if INPUT_PLANNER_USE_LLM:
+        # LLM path: slower (~30-60s reasoning model), better for ambiguous natural-language input
+        node_list = ", ".join(f'"{n}"' for n in NEO4J_ENTRY_NODES)
+        prompt = _PLANNER_PROMPT.format(raw_input=raw_input, node_list=node_list)
+        try:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                **{k: v for k, v in LLM_CONFIG.items() if v and k != "temperature"},
+                temperature=0,
+                max_retries=1,
+            )
+            result = llm.invoke([
+                {"role": "system", "content": _PLANNER_SYSTEM},
+                {"role": "user", "content": prompt},
+            ])
+            query_object = _parse_query_object(str(result.content))
+        except Exception as e:
+            if DEBUG_RETRIEVAL:
+                print(f"\n[INPUT_PLANNER] LLM call failed: {e}")
 
     if query_object is None:
+        # Rule-based path (default): instant, covers BSP structured error logs well
         query_object = _build_fallback(raw_input)
         if DEBUG_RETRIEVAL:
-            print("\n[INPUT_PLANNER] using rule-based fallback")
+            mode = "rule-based (INPUT_PLANNER_USE_LLM=0)" if not INPUT_PLANNER_USE_LLM else "rule-based fallback (LLM failed)"
+            print(f"\n[INPUT_PLANNER] using {mode}")
 
     if not query_object["semantic_query"]:
         query_object["semantic_query"] = raw_input[:300]
