@@ -9,7 +9,7 @@ Chat path — standalone mode only; uses LLM, rag_context is not forwarded to ag
 
 from __future__ import annotations
 
-from rag_config import DEBUG_RETRIEVAL, LLM_CONFIG, LLM_TOP_K_CHUNKS, LLM_CHUNK_MAX_CHARS
+from rag.config import DEBUG_RETRIEVAL, LLM_CONFIG, LLM_TOP_K_CHUNKS, LLM_CHUNK_MAX_CHARS
 from rag.rag_state import AgentState
 
 _CHAT_SYSTEM = (

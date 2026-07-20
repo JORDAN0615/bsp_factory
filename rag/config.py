@@ -13,7 +13,7 @@ LLM_CONFIG = {
 
 # Qdrant persistent storage path
 QDRANT_PATH = os.getenv("QDRANT_PATH") or str(
-    os.path.join(os.path.dirname(__file__), "_qdrant_data")
+    os.path.join(os.path.dirname(__file__), "..", "_qdrant_data")
 )
 
 # Show retrieval debug info
@@ -22,13 +22,10 @@ DEBUG_RETRIEVAL = os.getenv("DEBUG_RETRIEVAL", "1") == "1"
 # Max chunks returned after reranking (retrieval pool)
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
 
-# How many top chunks are actually sent to the LLM for diagnosis generation.
-# Reducing from 5→3 cuts context length by ~40%, speeds up LLM response noticeably.
+# How many top chunks are formatted and passed to patch_agent as context.
 LLM_TOP_K_CHUNKS = int(os.getenv("LLM_TOP_K_CHUNKS", "3"))
 
-# Max chars per chunk sent to LLM. The reranker already truncates to 1200 chars
-# for scoring; here we truncate further for the LLM generation step only.
-# 400 chars ≈ one clear symptom description, sufficient for diagnosis.
+# Max chars per chunk in the formatted output sent to patch_agent.
 LLM_CHUNK_MAX_CHARS = int(os.getenv("LLM_CHUNK_MAX_CHARS", "400"))
 
 # CRAG: reranker score threshold to consider retrieval "good enough"

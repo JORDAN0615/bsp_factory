@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 
-from rag_config import LLM_CONFIG, NEO4J_ENTRY_NODES, DEBUG_RETRIEVAL, INPUT_PLANNER_USE_LLM
+from rag.config import LLM_CONFIG, NEO4J_ENTRY_NODES, DEBUG_RETRIEVAL, INPUT_PLANNER_USE_LLM
 from rag.rag_state import AgentState
 
 _PLANNER_SYSTEM = "You are a BSP retrieval query planner. Output strict JSON only, no markdown fences."

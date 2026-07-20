@@ -44,7 +44,7 @@ from rag.nodes.input_planner import input_planner_node
 from rag.nodes.llm import llm_node
 from rag.nodes.rewrite import rewrite_node
 from rag.rag_state import AgentState
-from rag_config import CRAG_MAX_RETRIES, CRAG_SCORE_THRESHOLD
+from rag.config import CRAG_MAX_RETRIES, CRAG_SCORE_THRESHOLD
 
 
 def _route_after_grader(state: AgentState) -> Literal["llm", "rewrite", "gap_report"]:

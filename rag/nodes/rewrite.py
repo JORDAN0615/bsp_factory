@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from rag_config import LLM_CONFIG, DEBUG_RETRIEVAL
+from rag.config import LLM_CONFIG, DEBUG_RETRIEVAL
 from rag.rag_state import AgentState
 
 

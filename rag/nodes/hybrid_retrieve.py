@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import concurrent.futures
 
-from rag_config import DEBUG_RETRIEVAL, RETRIEVAL_TOP_K
+from rag.config import DEBUG_RETRIEVAL, RETRIEVAL_TOP_K
 from rag.rag_state import AgentState
 from rag.models import Chunk
 from rag.reranker import rerank as rerank_docs

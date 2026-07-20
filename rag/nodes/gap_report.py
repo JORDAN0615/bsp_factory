@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from rag_config import DEBUG_RETRIEVAL
+from rag.config import DEBUG_RETRIEVAL
 from rag.rag_state import AgentState
 
 

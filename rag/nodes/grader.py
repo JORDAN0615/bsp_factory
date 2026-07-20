@@ -10,7 +10,7 @@ No extra LLM call needed.
 
 from __future__ import annotations
 
-from rag_config import CRAG_SCORE_THRESHOLD, CRAG_MAX_RETRIES, DEBUG_RETRIEVAL
+from rag.config import CRAG_SCORE_THRESHOLD, CRAG_MAX_RETRIES, DEBUG_RETRIEVAL
 from rag.rag_state import AgentState
 
 
