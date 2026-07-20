@@ -15,9 +15,7 @@ from typing import Any
 
 from rag.models import Chunk
 
-POSTGRES_URL = os.getenv(
-    "POSTGRES_URL", "postgresql://bsp:bsp_secret@localhost:5432/bsp_agent"
-)
+POSTGRES_URL = os.getenv("POSTGRES_URL", "")
 
 
 def _get_conn():
