@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     )
     mic741_rerank_enabled: bool = Field(default=True, alias="MIC741_RERANK_ENABLED")
     mic741_rerank_top_k: int = Field(default=3, alias="MIC741_RERANK_TOP_K")
+    rag_crag_enabled: bool = Field(default=False, alias="RAG_CRAG_ENABLED")
     auto_push_enabled: bool = Field(default=False, alias="AUTO_PUSH_ENABLED")
     git_remote: str = Field(default="origin", alias="GIT_REMOTE")
     bsp_base_branch: str = Field(default="", alias="BSP_BASE_BRANCH")

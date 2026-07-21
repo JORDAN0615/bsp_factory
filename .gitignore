@@ -11,3 +11,7 @@ runs/*
 !runs/.gitkeep
 RAG_DOCS/
 .DS_Store
+# RAG runtime artifacts (local only)
+_qdrant/
+.cache/
+MIC-741_KnowledgeBase/
