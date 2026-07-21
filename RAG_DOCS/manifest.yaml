@@ -1,0 +1,46 @@
+sources:
+  - path: RAG_DOCS/Jetson_Thor_Series_Modules_Pinmux_Template_v1.7.xlsm
+    doc_key: thor-pinmux-v1.7
+    title: Jetson Thor Series Modules Pinmux Template
+    type: pinmux_template
+    platform: Thor
+    version: "1.7"
+    sheet: null
+    header_rows: [6, 9]
+
+  - path: RAG_DOCS/IGX_T5000_Pinmux_Config_Template_v1.2.xlsm
+    doc_key: igx-t5000-pinmux-v1.2
+    title: IGX T5000 Pinmux Config Template
+    type: pinmux_template
+    platform: IGX_T5000
+    version: "1.2"
+    sheet: null
+    header_rows: [6, 9]
+
+  - path: RAG_DOCS/Jetson_Thor_Series_Modules_DesignGuide_DG12084001_v1.3.pdf
+    doc_key: thor-design-guide-v1.3
+    title: Jetson Thor Series Modules Design Guide
+    type: design_guide
+    platform: Thor
+    version: "1.3"
+
+  - path: RAG_DOCS/Jetson_Thor_Series_Modules_Datasheet_DS-11945-001v1.4.pdf
+    doc_key: thor-datasheet-v1.4
+    title: Jetson Thor Series Modules Datasheet
+    type: datasheet
+    platform: Thor
+    version: "1.4"
+
+  - path: RAG_DOCS/IGX_T5000_Modules_DesignGuide_DG12265001_v1.0.pdf
+    doc_key: igx-t5000-design-guide-v1.0
+    title: IGX T5000 Modules Design Guide
+    type: design_guide
+    platform: IGX_T5000
+    version: "1.0"
+
+  - path: RAG_DOCS/IGX_T5000_Module_SMCU_DesignGuide_DG-12322-001_v1.0.pdf
+    doc_key: igx-t5000-smcu-design-guide-v1.0
+    title: IGX T5000 Module SMCU Design Guide
+    type: design_guide
+    platform: IGX_T5000
+    version: "1.0"

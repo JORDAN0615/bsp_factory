@@ -9,7 +9,7 @@ from agent.graph import (
     deep_patch_agent_node,
     human_review_node,
     patch_agent_node,
-    route_after_knowledge_retrieval,
+    route_after_classify_error,
     validate_patch_node,
     write_no_patch_node,
 )
@@ -910,12 +910,12 @@ def test_patch_agent_node_agentic_no_edits_routes_no_patch(tmp_path: Path, monke
     assert not staging.exists()
 
 
-def test_knowledge_routing_selects_deep_agent_only_when_enabled(tmp_path: Path) -> None:
+def test_classification_routes_directly_to_deep_agent_when_enabled(tmp_path: Path) -> None:
     legacy = make_settings(tmp_path)
     deep = make_settings(tmp_path, DEEP_AGENT_ENABLED=True)
 
-    assert route_after_knowledge_retrieval({"settings": legacy}) == "inspect_repo"
-    assert route_after_knowledge_retrieval({"settings": deep}) == "deep_patch_agent"
+    assert route_after_classify_error({"settings": legacy}) == "select_skills"
+    assert route_after_classify_error({"settings": deep}) == "deep_patch_agent"
 
 
 def test_deep_patch_agent_generates_diff_and_cleans_staging(
@@ -949,7 +949,6 @@ def test_deep_patch_agent_generates_diff_and_cleans_staging(
             "state": state,
             "settings": settings,
             "skill_text": "camera skill",
-            "knowledge_context": "past camera repair",
         }
     )
 

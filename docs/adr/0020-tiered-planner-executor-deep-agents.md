@@ -40,7 +40,7 @@ agent, gated by `PLANNER_ENABLED` (default off, requires `DEEP_AGENT_ENABLED`):
 
 ```text
 retrieve_mic741_knowledge
-  -> deep_agent_planner   { cloud model · list_skills/load_skill · ls/glob/grep/read_file · preloaded RAG }
+  -> deep_agent_planner   { cloud model · native skills · ls/glob/grep/read_file · search_mic741_knowledge (RAG tool) }
        produces -> repair guide (structured)
   -> deep_patch_agent     { local model · + stage_edit_file · consumes the guide }
   -> validate_patch -> code_review_agent -> target_build -> human_review -> ...
@@ -48,8 +48,9 @@ retrieve_mic741_knowledge
 
 - **Planner** reuses the ADR-0016/0017 harness but **read-only** (no
   `stage_edit_file`, built-in writes denied, no researcher-write). It discovers
-  skills via the tools, reads the repo, and is given the preloaded
-  `knowledge_context`. Its sole output is the guide (structured output, validated).
+  skills via the tools, reads the repo, and queries MIC-741 knowledge itself via
+  the `search_mic741_knowledge` tool (retrieval is inside the planner, not preloaded
+  upstream). Its sole output is the guide (structured output, validated).
 - **Executor** is today's `deep_patch_agent`, unchanged except it now receives the
   guide in its prompt (alongside issue, RAG, retry context) and is explicitly
   pointed at the **local** model.
@@ -135,8 +136,8 @@ near-all-local cost.
 - Three-tier (local gathers evidence -> cloud reasons into a guide -> local
   executes) if planner-side file reading proves token-heavy on the cloud.
 - Exposing the guide as a human-review checkpoint (approve the plan before code).
-- Making MIC-741 retrieval an on-demand tool for the planner (still preloaded; see
-  ADR-0017 deferred).
+- Making MIC-741 retrieval an on-demand tool for the **executor** too (it still gets
+  the preloaded `knowledge_context`; the planner already queries via the tool).
 
 ## Consequences
 

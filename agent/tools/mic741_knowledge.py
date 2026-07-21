@@ -432,7 +432,8 @@ def _query_rows(
               r.repair_rule,
               array_agg(left(r.content, %(match_chars)s) order by r.rank desc) as matches,
               p.patch_content,
-              fl.main_files
+              fl.main_files,
+              t.best_rank as rank
             from top_cases t
             join ranked r on r.case_id = t.case_id
             left join patches p on p.case_id = t.case_id

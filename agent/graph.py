@@ -54,7 +54,6 @@ class RepairGraphState(TypedDict, total=False):
     settings: Settings
     logs_text: list[str]
     skill_text: str
-    knowledge_context: str
     repo_inspection: str
     diff_text: str
     patch_format: str
@@ -72,7 +71,6 @@ def build_repair_graph(checkpointer=None):
     graph.add_node("classify_error", classify_error_node)
     graph.add_node("select_skills", select_skills_node)
     graph.add_node("load_skill", load_skill_node)
-    graph.add_node("retrieve_mic741_knowledge", retrieve_mic741_knowledge_node)
     graph.add_node("inspect_repo", inspect_repo_node)
     graph.add_node("patch_agent", patch_agent_node)
     graph.add_node("deep_planner", deep_planner_node)
@@ -91,20 +89,12 @@ def build_repair_graph(checkpointer=None):
         route_after_classify_error,
         {
             "select_skills": "select_skills",
-            "retrieve_mic741_knowledge": "retrieve_mic741_knowledge",
-        },
-    )
-    graph.add_edge("select_skills", "load_skill")
-    graph.add_edge("load_skill", "retrieve_mic741_knowledge")
-    graph.add_conditional_edges(
-        "retrieve_mic741_knowledge",
-        route_after_knowledge_retrieval,
-        {
-            "inspect_repo": "inspect_repo",
             "deep_patch_agent": "deep_patch_agent",
             "deep_planner": "deep_planner",
         },
     )
+    graph.add_edge("select_skills", "load_skill")
+    graph.add_edge("load_skill", "inspect_repo")
     graph.add_conditional_edges(
         "deep_planner",
         route_after_planner,
@@ -196,7 +186,6 @@ def run_repair_graph(state: BSPAgentState, settings: Settings) -> BSPAgentState:
                         "settings": settings,
                         "logs_text": logs_text,
                         "skill_text": "",
-                        "knowledge_context": "",
                         "guide_text": "",
                         "repo_inspection": "",
                         "diff_text": "",
@@ -253,13 +242,16 @@ def classify_error_node(graph_state: RepairGraphState) -> RepairGraphState:
 
 def route_after_classify_error(
     graph_state: RepairGraphState,
-) -> Literal["select_skills", "retrieve_mic741_knowledge"]:
+) -> Literal["select_skills", "deep_patch_agent", "deep_planner"]:
     # Deep agent discovers skills itself via list_skills/load_skill (ADR-0017),
-    # so the deep path skips the deterministic select/load nodes. The legacy path
-    # keeps them. MIC-741 knowledge is preloaded on both paths (unchanged).
-    if graph_state["settings"].deep_agent_enabled:
-        return "retrieve_mic741_knowledge"
-    return "select_skills"
+    # and queries BSP knowledge on demand via search_bsp_knowledge. The legacy
+    # path keeps deterministic skill selection and does not preload knowledge.
+    settings = graph_state["settings"]
+    if not settings.deep_agent_enabled:
+        return "select_skills"
+    if settings.planner_enabled:
+        return "deep_planner"
+    return "deep_patch_agent"
 
 
 def select_skills_node(graph_state: RepairGraphState) -> RepairGraphState:
@@ -322,56 +314,6 @@ def load_skill_node(graph_state: RepairGraphState) -> RepairGraphState:
     return {"state": state, "skill_text": skill_text}
 
 
-def retrieve_mic741_knowledge_node(graph_state: RepairGraphState) -> RepairGraphState:
-    state = graph_state["state"]
-    settings = graph_state["settings"]
-    state.stage = "retrieve_mic741_knowledge"
-    from agent.nodes.workflow import _attempt_dir
-
-    knowledge_context = ""
-    if settings.mic741_knowledge_enabled:
-        from agent.tools.mic741_knowledge import KnowledgeDBError, query_mic741_knowledge
-
-        try:
-            # Do NOT pass bug_type as subsystem: classify_with_patterns emits its
-            # own vocabulary ('unknown', 'camera_probe_failure', ...) which never
-            # matches the DB subsystem column ('camera', 'can', 'mgbe', ...), so a
-            # filter would silently zero out every match. Phase 1 is FTS-only; let
-            # ranking decide relevance.
-            knowledge_context = query_mic741_knowledge(
-                state.issue,
-                graph_state.get("logs_text", []),
-                settings,
-                subsystem=None,
-                limit=settings.mic741_knowledge_query_limit,
-                debug_dir=_attempt_dir(state) / "debug",
-            )
-        except KnowledgeDBError as exc:
-            knowledge_context = (
-                "## MIC-741 Knowledge Matches\n\n"
-                f"(MIC-741 knowledge unavailable: {exc})\n"
-            )
-    write_text(
-        _attempt_dir(state) / "mic741_knowledge.md",
-        knowledge_context or "## MIC-741 Knowledge Matches\n\n(disabled)\n",
-    )
-    _save_state(state)
-    return {"state": state, "knowledge_context": knowledge_context}
-
-
-def route_after_knowledge_retrieval(
-    graph_state: RepairGraphState,
-) -> Literal["inspect_repo", "deep_patch_agent", "deep_planner"]:
-    settings = graph_state["settings"]
-    if not settings.deep_agent_enabled:
-        return "inspect_repo"
-    # A cloud planner decides the fix first, then the local executor implements it
-    # (ADR-0020). Off by default -> the executor runs on its own as in ADR-0017.
-    if settings.planner_enabled:
-        return "deep_planner"
-    return "deep_patch_agent"
-
-
 def deep_planner_node(graph_state: RepairGraphState) -> RepairGraphState:
     """Cloud planner: decide the fix and emit a guide for the local executor (ADR-0020).
 
@@ -387,7 +329,6 @@ def deep_planner_node(graph_state: RepairGraphState) -> RepairGraphState:
     from agent.tools.planner_agent import run_planner_agent
     from agent.tools.retry_tools import build_retry_context
 
-    knowledge_context = graph_state.get("knowledge_context", "")
     retry_context = build_retry_context(state)
 
     rounds = 1 + settings.llm_failure_node_retries
@@ -399,7 +340,6 @@ def deep_planner_node(graph_state: RepairGraphState) -> RepairGraphState:
             guide = run_planner_agent(
                 state.repo_path,
                 state.issue,
-                knowledge_context,
                 retry_context,
                 settings,
                 recursion_limit=settings.planner_recursion_limit,
@@ -436,7 +376,6 @@ def inspect_repo_node(graph_state: RepairGraphState) -> RepairGraphState:
     settings = graph_state["settings"]
     attempt = state.current_attempt
     state.stage = "inspect_repo"
-    knowledge_context = graph_state.get("knowledge_context", "")
     from agent.nodes.workflow import _attempt_dir, _keywords_for_attempt, _repo_inspection_text
 
     def _deterministic_inspection(prefix: str = "") -> str:
@@ -454,7 +393,6 @@ def inspect_repo_node(graph_state: RepairGraphState) -> RepairGraphState:
                 attempt.selected_skills,
                 settings,
                 recursion_limit=settings.evidence_recursion_limit,
-                knowledge_context=knowledge_context,
             )
         except LLMError as exc:
             # ReAct evidence hit a transient LLM failure before collecting any
@@ -465,8 +403,6 @@ def inspect_repo_node(graph_state: RepairGraphState) -> RepairGraphState:
             )
     else:
         repo_inspection = _deterministic_inspection()
-    if knowledge_context.strip():
-        repo_inspection = f"{knowledge_context.rstrip()}\n\n{repo_inspection}"
     write_text(_attempt_dir(state) / "repo_inspection.md", repo_inspection)
     _save_state(state)
     return {"state": state, "repo_inspection": repo_inspection}
@@ -533,25 +469,21 @@ def deep_patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
     from agent.tools.retry_tools import build_retry_context
 
     skill_text = graph_state.get("skill_text", "")
-    knowledge_context = graph_state.get("knowledge_context", "")
     guide = graph_state.get("guide_text", "")
     retry_context = build_retry_context(state)
-    loaded_skills: list[str] = []
 
     def run_agent(staging: str) -> None:
         run_deep_patch_agent(
             staging,
             state.issue,
             skill_text,
-            knowledge_context,
             retry_context,
             settings,
             recursion_limit=settings.deep_agent_recursion_limit,
-            loaded_skills=loaded_skills,
             guide=guide,
         )
 
-    out = _run_staging_agent(
+    return _run_staging_agent(
         graph_state,
         run_agent,
         artifact_name="agentic_patch.diff",
@@ -559,16 +491,6 @@ def deep_patch_agent_node(graph_state: RepairGraphState) -> RepairGraphState:
         no_edits_reason="Deep Patch Agent made no edits.",
         failure_label="Deep Patch Agent",
     )
-    # The agent chose its own skills via list_skills/load_skill (ADR-0017); record
-    # them (deduped, order-preserving) so review/reporting still sees selected_skills.
-    if loaded_skills:
-        from agent.nodes.workflow import _attempt_dir
-
-        deduped = list(dict.fromkeys(loaded_skills))
-        state.current_attempt.selected_skills = deduped
-        write_json(_attempt_dir(state) / "selected_skills.json", deduped)
-        _save_state(state)
-    return out
 
 
 def _run_staging_agent(

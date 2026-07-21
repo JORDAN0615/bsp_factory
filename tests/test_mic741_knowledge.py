@@ -3,8 +3,6 @@ from pathlib import Path
 import pytest
 
 from agent.config import Settings
-from agent.graph import inspect_repo_node, retrieve_mic741_knowledge_node
-from agent.state import BSPAgentState, RepairAttempt
 from agent.tools.mic741_knowledge import (
     KnowledgeDBError,
     LLMError,
@@ -28,6 +26,7 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "skills_dir": Path("skills"),
         "validation_dir": Path("tests/validation"),
         "MIC741_KNOWLEDGE_ENABLED": False,
+        "DOC_RETRIEVAL_ENABLED": False,
         "MIC741_KNOWLEDGE_DB_URL": "",
         "MIC741_KNOWLEDGE_SOURCE_DIR": tmp_path / "MIC-741_KnowledgeBase",
     }
@@ -127,71 +126,6 @@ def test_query_requires_db_url(tmp_path: Path) -> None:
 
     with pytest.raises(KnowledgeDBError, match="MIC741_KNOWLEDGE_DB_URL"):
         query_mic741_knowledge("camera sipl", [], settings)
-
-
-def test_retrieve_mic741_knowledge_node_writes_artifact(tmp_path: Path, monkeypatch) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    state = BSPAgentState(
-        run_id="run123",
-        repo_path=str(repo),
-        run_dir=str(tmp_path / "runs" / "run123"),
-        issue="Camera SIPL download is hardcoded",
-        attempts=[RepairAttempt(attempt_no=1, bug_type="camera")],
-    )
-    settings = make_settings(
-        tmp_path,
-        MIC741_KNOWLEDGE_ENABLED=True,
-        MIC741_KNOWLEDGE_DB_URL="postgresql://example",
-        MIC741_KNOWLEDGE_QUERY_LIMIT=10,
-    )
-
-    def fake_query(issue, logs, settings, *, subsystem=None, limit=None, debug_dir=None):
-        assert issue == "Camera SIPL download is hardcoded"
-        assert logs == ["camera log"]
-        # bug_type is classify vocabulary and must NOT be used as a subsystem
-        # filter (it never matches the DB subsystem column).
-        assert subsystem is None
-        assert limit == 10
-        assert debug_dir == Path(state.run_dir) / "attempts" / "001" / "debug"
-        return "## MIC-741 Knowledge Matches\n\n### RE-07\nHistorical fix."
-
-    monkeypatch.setattr("agent.tools.mic741_knowledge.query_mic741_knowledge", fake_query)
-
-    result = retrieve_mic741_knowledge_node(
-        {"state": state, "settings": settings, "logs_text": ["camera log"]}
-    )
-
-    assert result["knowledge_context"].startswith("## MIC-741 Knowledge Matches")
-    assert state.stage == "retrieve_mic741_knowledge"
-    artifact = Path(state.run_dir) / "attempts" / "001" / "mic741_knowledge.md"
-    assert "Historical fix." in artifact.read_text(encoding="utf-8")
-
-
-def test_inspect_repo_prepends_existing_knowledge_context(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "task_download_after.sh").write_text("camera sipl\n", encoding="utf-8")
-    state = BSPAgentState(
-        run_id="run123",
-        repo_path=str(repo),
-        run_dir=str(tmp_path / "runs" / "run123"),
-        issue="Camera SIPL download is hardcoded",
-        attempts=[RepairAttempt(attempt_no=1, bug_type="camera")],
-    )
-    settings = make_settings(tmp_path)
-
-    result = inspect_repo_node(
-        {
-            "state": state,
-            "settings": settings,
-            "knowledge_context": "## MIC-741 Knowledge Matches\n\n### RE-07\nHistorical fix.",
-        }
-    )
-
-    assert result["repo_inspection"].startswith("## MIC-741 Knowledge Matches")
-    artifact = Path(state.run_dir) / "attempts" / "001" / "repo_inspection.md"
-    assert "Historical fix." in artifact.read_text(encoding="utf-8")
 
 
 def rerank_rows() -> list[dict]:

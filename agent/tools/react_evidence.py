@@ -40,7 +40,6 @@ def gather_evidence(
     selected_skills: list[str],
     settings: "Settings",
     recursion_limit: int | None = None,
-    knowledge_context: str = "",
 ) -> str:
     from langchain.agents import create_agent
     from langchain_openai import ChatOpenAI
@@ -70,7 +69,6 @@ def gather_evidence(
         "Gather read-only source evidence for this BSP repair task.\n\n"
         f"Issue:\n{issue}\n\n"
         f"Selected skills:\n{', '.join(selected_skills) or '(none)'}\n\n"
-        f"Historical MIC-741 knowledge:\n{knowledge_context[:20000] or '(none)'}\n\n"
         "Use tools as needed, then write concise findings. Do not propose a diff."
     )
     messages: list[Any] = []

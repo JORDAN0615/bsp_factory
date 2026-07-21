@@ -19,6 +19,7 @@ def make_settings(tmp_path: Path) -> Settings:
         LLM_BASE_URL="http://127.0.0.1:9/v1",
         LLM_API_KEY="EMPTY",
         LLM_MODEL="test",
+        WEB_FETCH_ENABLED=False,
         runs_dir=tmp_path / "runs",
         skills_dir=Path("skills"),
         validation_dir=Path("tests/validation"),
@@ -69,22 +70,37 @@ def test_build_deep_patch_agent_uses_stable_harness_api(tmp_path: Path) -> None:
     assert "tools" in agent.get_graph().nodes
 
 
-def test_skill_tools_list_and_load_record_selection(tmp_path: Path) -> None:
-    from agent.tools.deep_patch_agent import _build_skill_tools
+def test_deep_patch_agent_mounts_skills_natively(tmp_path: Path) -> None:
+    staging = make_staging(tmp_path)
+    agent = build_deep_patch_agent(staging, make_settings(tmp_path))
 
-    loaded: list[str] = []
-    list_skills, load_skill = _build_skill_tools(make_settings(tmp_path), loaded)
+    # Skills are copied into the backend root as an untracked dir so the native
+    # SkillsMiddleware can discover them; no hand-rolled skill tools remain.
+    assert (staging / ".deep-skills" / "jetson-build-source" / "SKILL.md").exists()
+    tool_names = {t.name for t in agent.get_graph().nodes["tools"].data.tools_by_name.values()} \
+        if "tools" in agent.get_graph().nodes else set()
+    assert "list_skills" not in tool_names
+    assert "load_skill" not in tool_names
+    assert "stage_edit_file" in tool_names
+    assert "search_bsp_knowledge" in tool_names
 
-    catalog = list_skills.invoke({})
-    assert "jetson-build-source" in catalog  # real skill folder under skills/
 
-    text = load_skill.invoke({"name": "jetson-build-source"})
-    assert "Build BSP Source" in text
-    assert loaded == ["jetson-build-source"]  # load_skill records what the agent read
+def test_deep_patch_agent_adds_web_fetch_only_when_enabled(tmp_path: Path) -> None:
+    staging = make_staging(tmp_path)
+    disabled = build_deep_patch_agent(staging, make_settings(tmp_path))
+    enabled_settings = make_settings(tmp_path)
+    enabled_settings.web_fetch_enabled = True
+    enabled = build_deep_patch_agent(staging, enabled_settings)
 
-    missing = load_skill.invoke({"name": "does-not-exist"})
-    assert "error" in missing
-    assert loaded == ["jetson-build-source"]  # a failed load is not recorded
+    disabled_tools = {
+        tool.name for tool in disabled.get_graph().nodes["tools"].data.tools_by_name.values()
+    }
+    enabled_tools = {
+        tool.name for tool in enabled.get_graph().nodes["tools"].data.tools_by_name.values()
+    }
+
+    assert "fetch_web_page" not in disabled_tools
+    assert "fetch_web_page" in enabled_tools
 
 
 def test_deep_patch_agent_denies_builtin_file_creation(tmp_path: Path, monkeypatch) -> None:
@@ -137,9 +153,15 @@ def test_route_after_classify_error_skips_skill_nodes_on_deep_path(tmp_path: Pat
     from agent.graph import route_after_classify_error
 
     deep = Settings(DEEP_AGENT_ENABLED=True, runs_dir=tmp_path / "runs")
+    planned = Settings(
+        DEEP_AGENT_ENABLED=True,
+        PLANNER_ENABLED=True,
+        runs_dir=tmp_path / "runs",
+    )
     legacy = Settings(DEEP_AGENT_ENABLED=False, runs_dir=tmp_path / "runs")
 
-    assert route_after_classify_error({"settings": deep}) == "retrieve_mic741_knowledge"
+    assert route_after_classify_error({"settings": deep}) == "deep_patch_agent"
+    assert route_after_classify_error({"settings": planned}) == "deep_planner"
     assert route_after_classify_error({"settings": legacy}) == "select_skills"
 
 
@@ -172,7 +194,6 @@ def test_run_deep_patch_agent_fake_harness_edits_staging(
         staging,
         "camera failed",
         "camera skill",
-        "MIC-741 case",
         "prior feedback",
         make_settings(tmp_path),
         recursion_limit=17,
@@ -182,8 +203,9 @@ def test_run_deep_patch_agent_fake_harness_edits_staging(
     assert captured["config"]["recursion_limit"] == 17
     prompt = captured["payload"]["messages"][0]["content"]
     assert "camera skill" in prompt
-    assert "MIC-741 case" in prompt
     assert "prior feedback" in prompt
+    assert "MUST call search_bsp_knowledge" in prompt
+    assert "do not edit first" in prompt
 
 
 def test_run_deep_patch_agent_recursion_limit_keeps_staging_edits(
@@ -210,7 +232,6 @@ def test_run_deep_patch_agent_recursion_limit_keeps_staging_edits(
     run_deep_patch_agent(
         staging,
         "camera failed",
-        "",
         "",
         "",
         make_settings(tmp_path),

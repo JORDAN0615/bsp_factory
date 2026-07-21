@@ -12,11 +12,8 @@ flash stay human-owned.
 ```text
 issue / boot log
   -> classify_error
-  -> select_skills
-  -> load selected SKILL.md files only
-  -> retrieve MIC-741 knowledge (optional)
-  -> inspect_repo -> patch_agent
-     OR Deep Patch Agent (experimental, combines inspection + staged editing)
+  -> Deep Patch Agent (recommended: discovers skills and queries BSP knowledge on demand)
+     OR legacy select_skills -> load_skill -> inspect_repo -> patch_agent
   -> validate_patch with git apply --check
   -> code_review_agent
   -> human_review interrupt
@@ -56,11 +53,10 @@ The LangGraph flow is deterministic around the LLM calls:
 
 ```text
 classify_error
-  -> select_skills          LLM chooses which skill folders to load
-  -> load_skill
-  -> retrieve_mic741_knowledge
-  -> inspect_repo -> patch_agent
-     OR deep_patch_agent     Deep Agents plans, reads, delegates, and edits staging
+  -> deep_planner           optional read-only planning agent
+  -> deep_patch_agent       discovers skills, calls search_bsp_knowledge,
+                            reads, delegates, and edits staging
+     OR legacy select_skills -> load_skill -> inspect_repo -> patch_agent
   -> validate_patch         deterministic patch validation only
   -> code_review_agent      independent LLM review
   -> human_review           LangGraph interrupt
@@ -128,6 +124,27 @@ The Deep Agent path is described in
 [`docs/adr/0016-deep-agent-patch-stage.md`](docs/adr/0016-deep-agent-patch-stage.md).
 It edits only a detached staging worktree. The deterministic validation, independent
 code review, human approval, apply, and publish stages remain unchanged.
+
+## Reranker Service
+
+Document and pinmux retrieval uses a local llama.cpp reranker service:
+
+```bash
+llama-server -hf gpustack/bge-reranker-v2-m3-GGUF \
+  --reranking --pooling rank -c 8192 -b 4096 -ub 4096 \
+  --host 127.0.0.1 --port 8081
+```
+
+Check that it is ready before starting a repair run:
+
+```bash
+curl http://127.0.0.1:8081/health
+```
+
+If the service is unavailable, retrieval degrades to PostgreSQL `ts_rank` order and
+marks that fallback explicitly in its output. The model must support llama.cpp's
+reranker pooling: `bge-reranker-v2-m3` is compatible; Qwen3-Reranker, mxbai, and
+ColBERT are pooling-incompatible and return incorrect scores in this setup.
 
 ## CLI Usage
 

@@ -23,6 +23,7 @@ from agent.nodes.workflow import (
 )
 from agent.state import BSPAgentState
 from agent.tools.git_tools import GitError
+from agent.tools.doc_ingest import ingest_documents, init_doc_schema
 from agent.tools.mic741_knowledge import (
     KnowledgeDBError,
     ingest_mic741_knowledge,
@@ -273,6 +274,43 @@ def knowledge_query(
     except KnowledgeDBError as exc:
         fail(str(exc))
     console.print(markdown)
+
+
+@app.command("docs-init")
+def docs_init() -> None:
+    settings = get_settings()
+    try:
+        init_doc_schema(settings.mic741_knowledge_db_url)
+    except KnowledgeDBError as exc:
+        fail(str(exc))
+    console.print("[green]Document knowledge schema initialized.[/green]")
+
+
+@app.command("docs-ingest")
+def docs_ingest(
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        exists=True,
+        dir_okay=False,
+        help="Document ingestion allowlist manifest.",
+    ),
+    force: bool = typer.Option(False, "--force", help="Re-ingest unchanged sources."),
+) -> None:
+    settings = get_settings()
+    try:
+        stats = ingest_documents(
+            manifest or settings.docs_manifest_path,
+            settings.mic741_knowledge_db_url,
+            force=force,
+        )
+    except KnowledgeDBError as exc:
+        fail(str(exc))
+    console.print(
+        "[green]Document knowledge ingested.[/green] "
+        f"sources={stats['sources']} chunks={stats['chunks']} "
+        f"pins={stats['pins']} skipped={stats['skipped']}"
+    )
 
 
 def _review_prompt(run: Path) -> None:

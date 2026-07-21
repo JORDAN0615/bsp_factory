@@ -103,3 +103,19 @@ _Avoid_: Failed patch, empty diff
 **Attempt Artifact**:
 A file produced within a repair attempt that records the selected skills, inspected source, proposed patch, review decision, target registration, validation output, or no-patch reason for that attempt.
 _Avoid_: Global patch file, overwritten test log
+
+**Knowledge Document**:
+A vendor-published hardware document admitted as repair knowledge, such as a design guide, datasheet, or pinmux template. Parts lists and binaries are not knowledge documents.
+_Avoid_: Reference material, spec sheet, PDF
+
+**Case Retrieval**:
+The lookup of past MIC-741 repairs, each an issue paired with the change that resolved it, used as precedent for a new repair.
+_Avoid_: Case RAG, history search
+
+**Doc Retrieval**:
+The lookup of knowledge documents for the board rules and pin facts a repair depends on. It answers what the hardware specifies, where Case Retrieval answers what was done before.
+_Avoid_: Doc RAG, PDF search, document lookup
+
+**Knowledge Injection**:
+The assembled knowledge placed into the agent's prompt for one repair attempt, drawn from Case Retrieval and Doc Retrieval.
+_Avoid_: Context stuffing, RAG output

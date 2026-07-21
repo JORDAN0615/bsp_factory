@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -86,14 +87,38 @@ def chat_completion(
 
 
 def strip_json_fence(text: str) -> str:
-    cleaned = text.strip()
+    """Recover the JSON payload from a model reply that is not pure JSON.
+
+    Never assume the JSON starts at character 0. Reasoning models emit a
+    `<think>…</think>` block first, and ordinary ones often add a sentence of
+    preamble; either made every `json.loads` call site fail at "line 1 column 1",
+    which silently degraded the Code Review Agent to `needs_human` on every run.
+    So: drop reasoning blocks, take a fenced block wherever it appears, and
+    finally fall back to the outermost brace/bracket span.
+    """
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # An unterminated reasoning block (truncated output) would otherwise swallow
+    # the whole reply; drop from the opening tag to the first fence instead.
+    cleaned = re.sub(r"<think>.*?(?=```|\{|\[)", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = cleaned.strip()
+
+    fenced = re.search(r"```(?:json)?\s*\n(.*?)\n?```", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
         if lines and lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
+        return "\n".join(lines).strip()
+
+    # Prose before or after bare JSON: keep the outermost object/array.
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start, end = cleaned.find(opener), cleaned.rfind(closer)
+        if 0 <= start < end:
+            return cleaned[start : end + 1].strip()
     return cleaned
 
 

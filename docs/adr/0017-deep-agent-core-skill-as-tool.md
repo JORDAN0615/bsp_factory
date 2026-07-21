@@ -1,18 +1,19 @@
-# Deep Agent as Core: Skill Discovery as a Tool
+# Deep Agent as Core: Native Skill Discovery
 
 Promote the Deep Agent (ADR-0016) from an experimental patch stage to the **core**
-repair actor, and move skill discovery/loading *inside* the harness as on-demand
-tools. This is the first split-out of the original oversized ADR-0017; the build,
-validation, and device-deploy pipeline moved to ADR-0018/0019/0020/0021.
+repair actor, and move skill discovery/loading *inside* the harness via Deep Agents'
+native `skills` feature. This is the first split-out of the original oversized
+ADR-0017; the build, validation, and device-deploy pipeline moved to
+ADR-0018/0019/0020/0021.
 
 Status: **Proposed** on branch `feat/deep-agent-integration`. Promotes ADR-0016's
 default-off deep-agent path toward the primary flow.
 
 ## Scope of this ADR (deliberately narrow)
 
-In: make the deep agent the core actor; give it `list_skills` / `load_skill` as
-tools so it decides which Jetson skill it needs; keep its existing read (`ls` /
-`glob` / `grep` / `read_file`) and edit (`stage_edit_file`) capability.
+In: make the deep agent the core actor; let it discover and read Jetson skills via
+the native `skills` middleware so it decides which skill it needs; keep its existing
+read (`ls` / `glob` / `grep` / `read_file`) and edit (`stage_edit_file`) capability.
 
 **Out (explicitly deferred):**
 
@@ -45,19 +46,25 @@ legacy `inspect_repo → patch_agent` path and its `select_skills` / `load_skill
 nodes remain wired for `DEEP_AGENT_ENABLED=false`, so the change stays reversible
 and A/B-comparable.
 
-### 2. Skill discovery becomes on-demand tools
+### 2. Skill discovery via the native deepagents `skills` feature
 
-Expose two read-only tools inside the harness, backed by the existing skill loader:
+Use Deep Agents' built-in `skills` mechanism (progressive disclosure via
+`SkillsMiddleware`): skill *metadata* is injected into the agent's context up front,
+and the agent reads a skill's full `SKILL.md` on demand with `read_file`. Our
+`skills/*/SKILL.md` already carry the `name`/`description` frontmatter the middleware
+expects.
 
-- `list_skills()` → the available Jetson skills under `skills/` with their
-  one-line descriptions (the same metadata `select_skills` reads today).
-- `load_skill(name)` → the full text of one skill on demand.
+Because the middleware reads skills through the agent's filesystem backend (the
+staging worktree), and our skills live in the orchestrator outside that root, the
+executor **mounts** `skills/` into the backend root as an untracked `.deep-skills/`
+directory before running (`mount_skills`). `git diff` reports only tracked changes,
+so the mounted copy never leaks into the generated patch (verified).
 
-The agent calls these when its investigation tells it which subsystem it is in
-(pinmux, camera, can, mgbe, …), instead of receiving a fixed pre-selected blob.
-On the deep path this **retires the `select_skills` and `load_skill` nodes**; the
-`RepairAttempt.selected_skills` field is still populated (from what the agent
-loaded) so downstream review/reporting is unchanged.
+The agent discovers the right skill when its investigation tells it which subsystem
+it is in (pinmux, camera, can, mgbe, …), instead of receiving a fixed pre-selected
+blob. On the deep path this **retires the `select_skills` and `load_skill` nodes**.
+(Trade-off: native loading has no hook, so the per-attempt `selected_skills` record
+that the earlier custom `load_skill` tool populated is no longer tracked.)
 
 The agent keeps everything else from ADR-0016 verbatim: the `ls`/`glob`/`grep`/
 `read_file` read tools, the single `stage_edit_file` mutation tool (exact string
@@ -69,7 +76,7 @@ built-in writes, and the ADR-0012 transient-failure degradation via
 ```text
 issue (intake + classify)
   -> deep_patch_agent {
-       plan · ls/glob/grep/read_file · [list_skills · load_skill] · stage_edit_file · verify
+       plan · ls/glob/grep/read_file · native skills (SkillsMiddleware) · stage_edit_file · verify
      }
   -> validate_patch -> code_review_agent -> human_review -> apply_patch -> publish
 ```

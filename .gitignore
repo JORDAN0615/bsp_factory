@@ -9,5 +9,6 @@ __pycache__/
 agent/tools_copy/
 runs/*
 !runs/.gitkeep
-RAG_DOCS/
+RAG_DOCS/*
+!RAG_DOCS/manifest.yaml
 .DS_Store

@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     planner_llm_model: str = Field(default="", alias="PLANNER_LLM_MODEL")
     planner_llm_timeout_sec: int = Field(default=180, alias="PLANNER_LLM_TIMEOUT_SEC")
     planner_recursion_limit: int = Field(default=40, alias="PLANNER_RECURSION_LIMIT")
+    web_fetch_enabled: bool = Field(default=False, alias="WEB_FETCH_ENABLED")
+    web_fetch_allowed_hosts: str = Field(
+        default="",
+        alias="WEB_FETCH_ALLOWED_HOSTS",
+    )
+    web_fetch_timeout_sec: int = Field(default=20, alias="WEB_FETCH_TIMEOUT_SEC")
+    web_fetch_max_chars: int = Field(default=30000, alias="WEB_FETCH_MAX_CHARS")
     target_build_enabled: bool = Field(default=False, alias="TARGET_BUILD_ENABLED")
     build_entrypoint: str = Field(default="scripts/build_bsp.sh", alias="BUILD_ENTRYPOINT")
     build_timeout_sec: int = Field(default=3600, alias="BUILD_TIMEOUT_SEC")
@@ -46,13 +53,25 @@ class Settings(BaseSettings):
         default=Path("RAG_DOCS/MIC-741_KnowledgeBase"),
         alias="MIC741_KNOWLEDGE_SOURCE_DIR",
     )
+    docs_manifest_path: Path = Field(
+        default=Path("RAG_DOCS/manifest.yaml"),
+        alias="DOCS_MANIFEST_PATH",
+    )
     mic741_knowledge_query_limit: int = Field(default=10, alias="MIC741_KNOWLEDGE_QUERY_LIMIT")
     mic741_knowledge_hunk_budget_chars: int = Field(
-        default=16000,
+        default=9000,
         alias="MIC741_KNOWLEDGE_HUNK_BUDGET_CHARS",
     )
     mic741_rerank_enabled: bool = Field(default=True, alias="MIC741_RERANK_ENABLED")
     mic741_rerank_top_k: int = Field(default=3, alias="MIC741_RERANK_TOP_K")
+    doc_retrieval_enabled: bool = Field(default=False, alias="DOC_RETRIEVAL_ENABLED")
+    reranker_url: str = Field(
+        default="http://127.0.0.1:8081/v1/rerank",
+        alias="RERANKER_URL",
+    )
+    reranker_timeout_sec: int = Field(default=120, alias="RERANKER_TIMEOUT_SEC")
+    rerank_candidate_limit: int = Field(default=100, alias="RERANK_CANDIDATE_LIMIT")
+    rerank_top_k: int = Field(default=10, alias="RERANK_TOP_K")
     auto_push_enabled: bool = Field(default=False, alias="AUTO_PUSH_ENABLED")
     git_remote: str = Field(default="origin", alias="GIT_REMOTE")
     bsp_base_branch: str = Field(default="", alias="BSP_BASE_BRANCH")
